@@ -349,8 +349,7 @@ jobs:
             --title "🚀 X投稿パターン生成（キャッシュ最適化版): ${{ steps.extract-url.outputs.url }}" \
             --body-file pr-body.md \
             --base main \
-            --head "${{ steps.extract-url.outputs.branch_name }}" \
-            --label "auto-generated,x-posts,prompt-cache-optimized")
+            --head "${{ steps.extract-url.outputs.branch_name }}"
           
           echo "✅ Pull Request作成完了: $PR_URL"
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
