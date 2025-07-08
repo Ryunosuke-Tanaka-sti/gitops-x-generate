@@ -11,6 +11,10 @@ on:
   issues:
     types: [opened]
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   generate-posts:
     runs-on: ubuntu-latest
