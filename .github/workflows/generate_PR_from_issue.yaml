@@ -213,151 +213,158 @@ jobs:
             exit 1
           fi
 
-      # Step 9: PR本文ファイルの準備
-      # GitHub CLI用にPR本文を一時ファイルとして保存
-      - name: Prepare PR body file
-        run: |
-          cat > pr-body.md << 'EOF'
-          ## 📝 自動生成されたX投稿パターン（プロンプトキャッシュ対応版）
-
-          ### 🔗 基本情報
-          | 項目 | 内容 |
-          |------|------|
-          | **対象URL** | ${{ steps.extract-url.outputs.url }} |
-          | **生成ファイル** | `${{ steps.extract-url.outputs.filename }}` |
-          | **Issue** | #${{ github.event.issue.number }} |
-          | **生成時刻** | ${{ steps.extract-url.outputs.date }} |
-          | **最適化** | プロンプトキャッシュ使用（37%コスト削減） |
-
-          ### 🔍 生成内容
-          - ✅ **ブログ記事の技術的分析**（5段階評価システム）
-          - ✅ **3パターンのX投稿文**（効果重視・課題共感・学習促進）
-          - ✅ **投稿推奨時間の提案**（エンジニア向け最適化）
-          - ✅ **コスト・トークン使用量の詳細記録**
-
-          ### 💰 コスト効率化の詳細
-          - 🎯 **プロンプトキャッシュ活用**（20,000トークン）
-          - 📉 **1回あたり約37%のコスト削減**（$0.147 → $0.093）
-          - 📊 **月間利用でさらなる効率化**
-          - 💾 **詳細なコスト記録**（ファイル内メタデータ）
-
-          ### 🚨 リンクカード表示保証
-          以下の最適化により、X投稿時のリンクカード表示を保証：
-          - ✅ **URLを投稿文の冒頭に単独行で配置**
-          - ✅ **URL前後のスペース・改行による明確分離**
-          - ✅ **他のテキストや絵文字と混在させない設計**
-          - ✅ **240文字超投稿でも冒頭URL配置を維持**
-
-          ### ✅ レビュー確認事項
-
-          #### 必須確認項目
-          - [ ] **投稿文の内容確認**（技術的正確性・表現の適切性）
-          - [ ] **ハッシュタグの適切性確認**（エンジニア向け・トレンド性）
-          - [ ] **リンクカード表示対応確認**（URL配置・分離）
-          - [ ] **投稿推奨時間の妥当性確認**（ターゲット時間帯）
-
-          #### 任意確認項目
-          - [ ] **コスト情報の確認**（メタデータ内の詳細情報）
-          - [ ] **ブランド・トーン確認**（企業・個人のトーンと整合性）
-          - [ ] **競合他社配慮**（類似投稿との差別化）
-
-          ### 📊 技術的詳細
-
-          #### 生成データの構造
-          ファイル内のYAML frontmatterに以下の情報が記録されています：
-          - **トークン使用量**（キャッシュ済み・新規・出力）
-          - **コスト情報**（USD・JPY両方）
-          - **生成日時・URL・プロンプトキャッシュ使用状況**
-          - **品質保証フラグ**（リンクカード最適化等）
-
-          #### システム情報
-          - **Generator Version**: v1.0.0
-          - **API Model**: Claude Sonnet 4
-          - **Cache Strategy**: Prompt Cache (20k tokens)
-          - **Output Format**: Markdown with YAML frontmatter
-
-          ### 🚀 次のステップ
-
-          1. **PRレビュー**（内容の確認と承認）
-          2. **必要に応じた手動調整**（投稿文の微調整）
-          3. **PRマージ**（postsディレクトリへの追加）
-          4. **投稿実行**（生成された投稿文の利用）
-
-          ### 🔗 関連リンク
-          - **元Issue**: #${{ github.event.issue.number }}
-          - **対象記事**: ${{ steps.extract-url.outputs.url }}
-          - **コスト最適化**: [プロンプトキャッシュについて](https://docs.anthropic.com/claude/docs/prompt-caching)
-
-          ---
-
-          > 🤖 **このPRは Issue #${{ github.event.issue.number }} から自動生成されました**  
-          > 💡 **プロンプトキャッシュ対応により、従来比37%のコスト削減を実現**  
-          > ⏰ **生成時刻**: ${{ steps.extract-url.outputs.date }}
-          EOF
-
-          echo "📝 PR本文ファイルを準備しました"
-          ls -la pr-body.md
-
-      # Step 10: 変更をGitにコミット
-      # GitHub CLIでPRを作成する前に変更をコミットする必要がある
-      - name: Commit changes
-        run: |
-          # Git設定（GitHub Actions botとして設定）
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          # 生成されたファイルをステージング
-          git add "${{ steps.extract-url.outputs.filename }}"
-          
-          # 変更があるかチェック
-          if git diff --staged --quiet; then
-            echo "⚠️  コミットする変更がありません"
-            exit 1
-          fi
-          
-          # コミット実行
-          git commit -m "feat: Add X posts for ${{ steps.extract-url.outputs.url }}
-
-          - Generated with prompt cache optimization (37% cost reduction)
-          - Issue: #${{ github.event.issue.number }}
-          - Generated at: ${{ steps.extract-url.outputs.date }}"
-          
-          echo "✅ 変更をコミットしました"
-
-      # Step 11: 新しいブランチを作成してプッシュ
-      # Pull Request作成のためのブランチ準備
-      - name: Create and push feature branch
-        run: |
-          # 新しいブランチを作成・切り替え
-          git checkout -b "${{ steps.extract-url.outputs.branch_name }}"
-          
-          # リモートにブランチをプッシュ
-          git push origin "${{ steps.extract-url.outputs.branch_name }}"
-          
-          echo "🌿 ブランチ '${{ steps.extract-url.outputs.branch_name }}' を作成・プッシュしました"
-
-      # Step 12: GitHub CLIを使用してPull Requestを作成
-      # 公式ツールを使用した信頼性の高いPR作成
-      - name: Create Pull Request with GitHub CLI
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "🚀 GitHub CLIでPull Requestを作成中..."
-          
-          # Pull Request作成
-          PR_URL=$(gh pr create \
-            --title "🚀 X投稿パターン生成（キャッシュ最適化版): ${{ steps.extract-url.outputs.url }}" \
-            --body-file pr-body.md \
-            --base main \
-            --head "${{ steps.extract-url.outputs.branch_name }}" )
-          
-          echo "✅ Pull Request作成完了: $PR_URL"
-          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
-
-          # 作成されたPRの詳細を表示
-          echo "📋 作成されたPR詳細:"
-          gh pr view "${{ steps.extract-url.outputs.branch_name }}" --json title,url,labels,state
+      # Step 12: GitHub Scriptを使用してPull Requestを作成
+      # 公式のactions/github-scriptを使用した信頼性の高いPR作成
+      - name: Create Pull Request with GitHub Script
+        uses: actions/github-script@v7
         id: create-pr
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            
+            // PR本文の定義
+            const prBody = `## 📝 自動生成されたX投稿パターン（プロンプトキャッシュ対応版）
+
+            ### 🔗 基本情報
+            | 項目 | 内容 |
+            |------|------|
+            | **対象URL** | ${{ steps.extract-url.outputs.url }} |
+            | **生成ファイル** | \`${{ steps.extract-url.outputs.filename }}\` |
+            | **Issue** | #${{ github.event.issue.number }} |
+            | **生成時刻** | ${{ steps.extract-url.outputs.date }} |
+            | **最適化** | プロンプトキャッシュ使用（37%コスト削減） |
+
+            ### 🔍 生成内容
+            - ✅ **ブログ記事の技術的分析**（5段階評価システム）
+            - ✅ **3パターンのX投稿文**（効果重視・課題共感・学習促進）
+            - ✅ **投稿推奨時間の提案**（エンジニア向け最適化）
+            - ✅ **コスト・トークン使用量の詳細記録**
+
+            ### 💰 コスト効率化の詳細
+            - 🎯 **プロンプトキャッシュ活用**（20,000トークン）
+            - 📉 **1回あたり約37%のコスト削減**（$0.147 → $0.093）
+            - 📊 **月間利用でさらなる効率化**
+            - 💾 **詳細なコスト記録**（ファイル内メタデータ）
+
+            ### 🚨 リンクカード表示保証
+            以下の最適化により、X投稿時のリンクカード表示を保証：
+            - ✅ **URLを投稿文の冒頭に単独行で配置**
+            - ✅ **URL前後のスペース・改行による明確分離**
+            - ✅ **他のテキストや絵文字と混在させない設計**
+            - ✅ **240文字超投稿でも冒頭URL配置を維持**
+
+            ### ✅ レビュー確認事項
+
+            #### 必須確認項目
+            - [ ] **投稿文の内容確認**（技術的正確性・表現の適切性）
+            - [ ] **ハッシュタグの適切性確認**（エンジニア向け・トレンド性）
+            - [ ] **リンクカード表示対応確認**（URL配置・分離）
+            - [ ] **投稿推奨時間の妥当性確認**（ターゲット時間帯）
+
+            #### 任意確認項目
+            - [ ] **コスト情報の確認**（メタデータ内の詳細情報）
+            - [ ] **ブランド・トーン確認**（企業・個人のトーンと整合性）
+            - [ ] **競合他社配慮**（類似投稿との差別化）
+
+            ### 📊 技術的詳細
+
+            #### 生成データの構造
+            ファイル内のYAML frontmatterに以下の情報が記録されています：
+            - **トークン使用量**（キャッシュ済み・新規・出力）
+            - **コスト情報**（USD・JPY両方）
+            - **生成日時・URL・プロンプトキャッシュ使用状況**
+            - **品質保証フラグ**（リンクカード最適化等）
+
+            #### システム情報
+            - **Generator Version**: v1.0.0
+            - **API Model**: Claude Sonnet 4
+            - **Cache Strategy**: Prompt Cache (20k tokens)
+            - **Output Format**: Markdown with YAML frontmatter
+
+            ### 🚀 次のステップ
+
+            1. **PRレビュー**（内容の確認と承認）
+            2. **必要に応じた手動調整**（投稿文の微調整）
+            3. **PRマージ**（postsディレクトリへの追加）
+            4. **投稿実行**（生成された投稿文の利用）
+
+            ### 🔗 関連リンク
+            - **元Issue**: #${{ github.event.issue.number }}
+            - **対象記事**: ${{ steps.extract-url.outputs.url }}
+            - **コスト最適化**: [プロンプトキャッシュについて](https://docs.anthropic.com/claude/docs/prompt-caching)
+
+            ---
+
+            > 🤖 **このPRは Issue #${{ github.event.issue.number }} から自動生成されました**  
+            > 💡 **プロンプトキャッシュ対応により、従来比37%のコスト削減を実現**  
+            > ⏰ **生成時刻**: ${{ steps.extract-url.outputs.date }}`;
+
+            try {
+              console.log('🚀 Pull Request作成開始...');
+              
+              // 既存のPRをチェック（重複防止）
+              const existingPrs = await github.rest.pulls.list({
+                owner,
+                repo,
+                head: `${owner}:${{ steps.extract-url.outputs.branch_name }}`,
+                base: 'main',
+                state: 'open'
+              });
+
+              if (existingPrs.data.length > 0) {
+                const existingPr = existingPrs.data[0];
+                console.log(`⚠️  既存のPRが見つかりました: ${existingPr.html_url}`);
+                
+                // 既存PRを更新
+                const updatedPr = await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number: existingPr.number,
+                  title: "🚀 X投稿パターン生成（キャッシュ最適化版): ${{ steps.extract-url.outputs.url }}",
+                  body: prBody
+                });
+                
+                console.log(`✅ 既存PRを更新しました: ${updatedPr.data.html_url}`);
+                return {
+                  pr_number: updatedPr.data.number,
+                  pr_url: updatedPr.data.html_url,
+                  action: 'updated'
+                };
+              }
+
+              // 新しいPRを作成
+              const newPr = await github.rest.pulls.create({
+                owner,
+                repo,
+                title: "🚀 X投稿パターン生成（キャッシュ最適化版): ${{ steps.extract-url.outputs.url }}",
+                head: "${{ steps.extract-url.outputs.branch_name }}",
+                base: "main",
+                body: prBody,
+                draft: false
+              });
+
+              console.log(`✅ 新しいPRを作成しました: ${newPr.data.html_url}`);
+
+              // ラベルを追加
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: newPr.data.number,
+                labels: []
+              });
+
+              console.log('🏷️  ラベルを追加しました');
+
+              return {
+                pr_number: newPr.data.number,
+                pr_url: newPr.data.html_url,
+                action: 'created'
+              };
+
+            } catch (error) {
+              console.error('❌ PR作成でエラーが発生:', error);
+              throw error;
+            }
 
       # Step 13: Issue作成者への完了通知コメント
       # 生成状況とコスト情報を含む詳細な報告
@@ -426,7 +433,7 @@ jobs:
               ## 🔗 便利なリンク
               
               - **生成ファイル確認**: \`${{ steps.extract-url.outputs.filename }}\`
-              - **PRページ**: ${{ steps.create-pr.outputs.pr_url }}
+              - **PRページ**: ${{ fromJSON(steps.create-pr.outputs.result).pr_url }}
               - **元記事**: ${{ steps.extract-url.outputs.url }}
               
               ---
@@ -509,7 +516,7 @@ jobs:
 # 【権限エラーの対処法】
 # 1. リポジトリ設定確認: Settings > Actions > General
 # 2. 組織設定確認: Organization settings (該当する場合)
-# 3. GitHub CLIの利点: 公式ツールのため権限エラーが発生しにくい
+# 3. GitHub Scriptの利点: 公式Action + 柔軟なエラーハンドリング
 #
 # 【コスト効率化】
 # - プロンプトキャッシュにより2回目以降の実行で37%コスト削減
