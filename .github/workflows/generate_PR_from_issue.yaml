@@ -467,12 +467,12 @@ jobs:
               console.log(`✅ 新しいPRを作成しました: ${newPr.data.html_url}`);
 
               // ラベルを追加
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number: newPr.data.number,
-                labels: []
-              });
+              // await github.rest.issues.addLabels({
+              //   owner,
+              //   repo,
+              //   issue_number: newPr.data.number,
+              //   labels: []
+              // });
 
               console.log('🏷️  ラベルを追加しました');
 
