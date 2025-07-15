@@ -260,7 +260,7 @@ jobs:
 
           # Python生成スクリプトを実行
           # エラーが発生した場合はワークフローを停止
-          python scripts/generate_posts_with_cache_dummy.py
+          python scripts/dummy.py
           GENERATION_EXIT_CODE=$?
 
           if [ $GENERATION_EXIT_CODE -ne 0 ]; then
