@@ -893,7 +893,7 @@ revision_history:
 """
 
         # コンテンツとメタデータを結合
-        full_content = content + frontmatter
+        full_content = frontmatter + content
 
         try:
             # ファイルに書き込み（UTF-8エンコーディング）
