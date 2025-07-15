@@ -260,7 +260,7 @@ jobs:
 
           # Python生成スクリプトを実行
           # エラーが発生した場合はワークフローを停止
-          python scripts/generate_posts_with_cache.py
+          python scripts/generate_posts_with_cache_dummy.py
           GENERATION_EXIT_CODE=$?
 
           if [ $GENERATION_EXIT_CODE -ne 0 ]; then
@@ -335,17 +335,38 @@ jobs:
             echo "📊 ファイルサイズ: ${FILE_SIZE} bytes"
             
             # YAML frontmatterを除去してMarkdownコンテンツを抽出
-            # 最初の --- から次の --- までをスキップして、その後のコンテンツを取得
+            # 新仕様：文末にあるfrontmatterを除去（最後の --- 以降を除去）
             CONTENT=$(awk '
-              BEGIN { in_frontmatter = 0; content_started = 0 }
-              /^---$/ { 
-                if (!content_started) {
-                  in_frontmatter = !in_frontmatter
-                  if (!in_frontmatter) content_started = 1
-                  next
+              BEGIN { buffer = ""; lines = 0 }
+              {
+                lines++
+                buffer = buffer $0 "\n"
+              }
+              END {
+                # 最後の --- を探して、それより前のコンテンツを出力
+                split(buffer, all_lines, "\n")
+                last_frontmatter_line = 0
+                
+                # 後ろから検索して最後の --- を見つける
+                for (i = length(all_lines); i >= 1; i--) {
+                  if (all_lines[i] == "---") {
+                    last_frontmatter_line = i
+                    break
+                  }
+                }
+                
+                # frontmatterが見つかった場合はその前まで、見つからない場合は全体を出力
+                if (last_frontmatter_line > 0) {
+                  for (i = 1; i < last_frontmatter_line; i++) {
+                    if (all_lines[i] != "") print all_lines[i]
+                  }
+                } else {
+                  # frontmatterがない場合は全体を出力
+                  for (i = 1; i <= length(all_lines); i++) {
+                    if (all_lines[i] != "") print all_lines[i]
+                  }
                 }
               }
-              content_started && !in_frontmatter { print }
             ' "$GENERATED_FILE")
             
             # 抽出したコンテンツをファイルに保存（GitHub Actionsの変数制限回避）
@@ -409,15 +430,15 @@ jobs:
             5. **フィードバック提供**（改善点の共有）
 
             ## 🔗 関連リンク
-            - **元Issue**: #${{ github.event.issue.number }}
             - **対象記事**: ${{ steps.extract-url.outputs.url }}
             - **生成ファイル**: \`${{ steps.extract-url.outputs.filename }}\`
 
             ---
 
+            Closes #${{ github.event.issue.number }}
+
             > 🤖 **このPRは Issue #${{ github.event.issue.number }} から自動生成されました**  
             > ⏰ **生成時刻**: ${{ steps.extract-url.outputs.date }}  
-            > � **プロンプトキャッシュで37%コスト削減**
             `;
 
             try {
@@ -511,7 +532,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: `🤖 **X投稿パターンの自動生成が完了しました！**
-              
+
               # 💡 次のアクション
               
               ## 1. **PRレビュー**

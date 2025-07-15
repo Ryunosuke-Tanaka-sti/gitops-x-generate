@@ -8,28 +8,23 @@
     "customizations": {
         "vscode": {
             "extensions": [
-                // Python関連（最小限）
                 "ms-python.python",
                 "ms-python.black-formatter",
-                "ms-python.flake8",
-                // Git関連
-                "eamodio.gitlens",
-                // 開発支援
                 "ms-vscode.vscode-json",
-                "redhat.vscode-yaml"
+                "ms-python.flake8"
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.formatting.provider": "black",
+                "terminal.integrated.defaultProfile.linux": "bash",
                 "python.linting.enabled": true,
-                "python.linting.pylintEnabled": false,
-                "editor.codeActionsOnSave": {
-                    "source.organizeImports": "explicit"
-                },
-                "[python]": {
-                    "editor.defaultFormatter": "ms-python.black-formatter",
-                    "editor.formatOnSave": true
-                },
-                "python.linting.flake8Enabled": true
+                "python.linting.pylintEnabled": true,
+                "python.linting.lintOnSave": true,
+                "python.linting.flake8Enabled": true,
+                "": {
+                    "editor.formatOnSave": true,
+                    "editor.defaultFormatter": "ms-python.black-formatter"
+                }
             }
         }
     },
