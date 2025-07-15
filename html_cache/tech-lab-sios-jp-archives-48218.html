@@ -1,0 +1,172 @@
+<h1>マルチステージビルドでPythonアプリケーションを軽量化 | SIOS Tech. Lab</h1>
+
+<section class="entry-content"><p>PSSLの佐々木です。</p><p>今回は、Dockerのマルチステージビルドを使ってPythonアプリケーションのサイズを削減する方法を解説します。</p><p>JavaやGoのようなコンパイル言語であればビルド時と実行が明確に分かれており、実行時にはバイナリだけあればよいのでマルチステージビルドと相性よく組み合わせて容量を削減できるというのは非常にわかりやすいと思いますが、PythonやRubyのよなインタプリター言語の場合には効果があるのかないのかいまいちピンとこなかったので自身の検証もかねてブログにまとめました。</p><div><div><div><b>目次</b></div><div><ul><li><a href="#somosomomaruchisutejibirudotte_he"><span>1</span><span>そもそもマルチステージビルドって何？</span></a></li><li><a href="#shi_jinoDockerfilede_bi_jiaoshitemiyou"><span>2</span><span>実際のDockerfileで比較してみよう</span></a><ul><li><a href="#cong_lainoshingurusutejibirudo"><span>2.1</span><span>❌ 従来のシングルステージビルド</span></a></li><li><a href="#maruchisutejibirudo"><span>2.2</span><span>✅ マルチステージビルド</span></a></li></ul></li><li><a href="#maruchisutejibirudono3tsunomeritto"><span>3</span><span>マルチステージビルドの3つのメリット</span></a><ul><li><a href="#1_saizu_xue_jian"><span>3.1</span><span>1. サイズ削減</span></a></li><li><a href="#2_sekyuriti_xiang_shang"><span>3.2</span><span>2. セキュリティ向上</span></a></li><li><a href="#3_depuroi_gao_su_hua"><span>3.3</span><span>3. デプロイ高速化</span></a></li></ul></li><li><a href="#shi_zhuangnopointo"><span>4</span><span>実装のポイント</span></a><ul><li><a href="#AS_judesutejini_ming_qianwotsukeru"><span>4.1</span><span>AS句でステージに名前をつける</span></a></li><li><a href="#COPY_-fromde_bi_yaonafairudakewo_yi_dong"><span>4.2</span><span>COPY –fromで必要なファイルだけを移動</span></a></li><li><a href="#bu_yaofairuno_xue_chu"><span>4.3</span><span>不要ファイルの削除</span></a></li></ul></li><li><a href="#kai_fa_huan_jingdeno_shii_fang"><span>5</span><span>開発環境での使い方</span></a></li><li><a href="#shi_jinidorekurai_xiao_guogaaruno"><span>6</span><span>実際にどれくらい効果があるの？</span></a></li><li><a href="#nazePythondemomaruchisutejibirudono_xiao_guogaarunoka"><span>7</span><span>なぜPythonでもマルチステージビルドの効果があるのか</span></a></li><li><a href="#matome"><span>8</span><span>まとめ</span></a></li></ul></div></div></div><h2><span>そもそもマルチステージビルドって何？</span></h2><p>マルチステージビルドとは、1つのDockerfile内で複数の段階（ステージ）に分けてイメージを構築する手法です。</p><p><strong>従来の問題</strong>：</p><ul><li>Pythonパッケージをビルドするためにgccやg++が必要</li><li>しかし、実行時にはビルドツールは不要</li><li>でも、従来は最終イメージにビルドツールが残ってしまう</li></ul><p><strong>マルチステージビルドの解決策</strong>：</p><ol><li><strong>ビルドステージ</strong>：必要なパッケージをコンパイル・ビルド</li><li><strong>実行ステージ</strong>：ビルド結果だけを持ってきて軽量なイメージを作成</li></ol><h2><span>実際のDockerfileで比較してみよう</span></h2><h3><span>❌ 従来のシングルステージビルド</span></h3><pre><code># シングルステージビルド用Dockerfile
+FROM python:3.13-slim
+
+# ビルド時に必要なパッケージをインストール
+RUN apt-get update &amp;&amp; apt-get install -y \\
+    gcc \\
+    g++ \\
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+# 非rootユーザーを作成（ホームディレクトリも作成）
+RUN groupadd -r appuser &amp;&amp; useradd -r -g appuser -m appuser
+
+# 作業ディレクトリを作成
+WORKDIR /app
+
+# 依存関係ファイルをコピー
+COPY requirements.txt .
+
+# 依存関係をインストール
+RUN pip install --no-cache-dir --upgrade pip &amp;&amp; \\
+    pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションコードをコピー
+COPY . .
+
+# 不要なファイルとディレクトリを削除
+RUN find . -type d -name "__pycache__" -exec rm -rf {} + 2&gt;/dev/null || true &amp;&amp; \\
+    find . -type f -name "*.pyc" -delete &amp;&amp; \\
+    rm -rf venv/ &amp;&amp; \\
+    rm -rf .git/ &amp;&amp; \\
+    rm -rf .pytest_cache/ &amp;&amp; \\
+    rm -rf *.egg-info/ &amp;&amp; \\
+    rm -rf .coverage &amp;&amp; \\
+    rm -rf htmlcov/
+
+# アプリケーションディレクトリの所有者を変更
+RUN chown -R appuser:appuser /app
+
+# promptflowが使用するディレクトリを作成
+RUN mkdir -p /home/appuser/.promptflow &amp;&amp; \\
+    chown -R appuser:appuser /home/appuser/.promptflow
+
+# 非rootユーザーに切り替え
+USER appuser
+
+# 環境変数でホームディレクトリを明示的に設定
+ENV HOME=/home/appuser
+
+# ポートを公開
+EXPOSE 5000
+
+# ヘルスチェック
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\
+    CMD python -c "import urllib.request; urllib.request.urlopen('&lt;http://localhost:5000/api/health&gt;')" || exit 1
+
+# アプリケーションを実行
+CMD ["python", "app.py"]
+
+</code></pre><h3><span>✅ マルチステージビルド</span></h3><pre><code># マルチステージビルド用Dockerfile
+# ステージ1: ビルドステージ
+FROM python:3.13-slim AS builder
+
+# ビルド時に必要なパッケージをインストール
+RUN apt-get update &amp;&amp; apt-get install -y \\
+    gcc \\
+    g++ \\
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+# 作業ディレクトリを作成
+WORKDIR /build
+
+# 依存関係ファイルをコピー
+COPY requirements.txt .
+
+# 依存関係をインストール（グローバルにインストール）
+RUN pip install --no-cache-dir --upgrade pip &amp;&amp; \\
+    pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションコードをコピー
+COPY . .
+
+# 不要なファイルとディレクトリを削除
+RUN find . -type d -name "__pycache__" -exec rm -rf {} + 2&gt;/dev/null || true &amp;&amp; \\
+    find . -type f -name "*.pyc" -delete &amp;&amp; \\
+    rm -rf venv/ &amp;&amp; \\
+    rm -rf .git/ &amp;&amp; \\
+    rm -rf .pytest_cache/ &amp;&amp; \\
+    rm -rf *.egg-info/ &amp;&amp; \\
+    rm -rf .coverage &amp;&amp; \\
+    rm -rf htmlcov/
+
+# ステージ2: 実行ステージ
+FROM python:3.13-slim AS runtime
+
+# 実行時に必要な最小限のパッケージをインストール
+RUN apt-get update &amp;&amp; apt-get install -y \\
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+# 非rootユーザーを作成（ホームディレクトリも作成）
+RUN groupadd -r appuser &amp;&amp; useradd -r -g appuser -m appuser
+
+# 作業ディレクトリを作成
+WORKDIR /app
+
+# ビルドステージからPythonパッケージをコピー
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# アプリケーションコードをコピー
+COPY --from=builder /build/app.py .
+COPY --from=builder /build/connection.yaml .
+COPY --from=builder /build/flows ./flows/
+COPY --from=builder /build/services ./services/
+
+# アプリケーションディレクトリの所有者を変更
+RUN chown -R appuser:appuser /app
+
+# promptflowが使用するディレクトリを作成
+RUN mkdir -p /home/appuser/.promptflow &amp;&amp; \\
+    chown -R appuser:appuser /home/appuser/.promptflow
+
+# 非rootユーザーに切り替え
+USER appuser
+
+# 環境変数でホームディレクトリを明示的に設定
+ENV HOME=/home/appuser
+
+# ポートを公開
+EXPOSE 5000
+
+# ヘルスチェック
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\
+    CMD python -c "import urllib.request; urllib.request.urlopen('&lt;http://localhost:5000/api/health&gt;')" || exit 1
+
+# アプリケーションを実行
+CMD ["python", "app.py"]
+
+</code></pre><h2><span>マルチステージビルドの3つのメリット</span></h2><h3><span>1. <strong>サイズ削減</strong></span></h3><p>不要なビルドツールや中間ファイルが除去されるため、イメージサイズが大幅に小さくなります。</p><h3><span>2. <strong>セキュリティ向上</strong></span></h3><p>実行時に不要なツール（gcc、コンパイラなど）が含まれないため、攻撃面が減少します。</p><h3><span>3. <strong>デプロイ高速化</strong></span></h3><p>イメージが軽量になることで、レジストリへのpush/pullが高速化されます。</p><h2><span>実装のポイント</span></h2><h3><span>AS句でステージに名前をつける</span></h3><pre><code>FROM python:3.13-slim AS builder  # ← 「builder」という名前
+FROM python:3.13-slim AS runtime  # ← 「runtime」という名前
+
+</code></pre><h3><span>COPY –fromで必要なファイルだけを移動</span></h3><pre><code># builderステージからsite-packagesだけをコピー
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+
+</code></pre><h3><span>不要ファイルの削除</span></h3><pre><code>RUN find . -name "__pycache__" -exec rm -rf {} + &amp;&amp; \\
+    find . -name "*.pyc" -delete
+
+</code></pre><h2><span>開発環境での使い方</span></h2><p>実際にマルチステージビルドを開発で使う場合は、Docker Composeと組み合わせるのがおすすめです。</p><pre><code>services:
+  app:
+    build: .  # マルチステージDockerfileを使用
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app  # 開発時はコードをマウント
+    environment:
+      - FLASK_DEBUG=1
+
+</code></pre><h2><span>実際にどれくらい効果があるの？</span></h2><p>筆者が実際にPythonアプリケーション（promptflowやFlaskを使用）で試した結果がこちらです：</p><pre><code>REPOSITORY                    TAG      IMAGE ID       CREATED         SIZE
+my-app-single                latest   99aa62f1267a   1 minute ago    1.45GB
+my-app-multi                 latest   27b56911a385   6 minutes ago   636MB
+
+</code></pre><p><strong>約810MB（56%）の削減に成功しています。</strong></p><p>この差は特に以下のような場面で威力を発揮します：</p><ul><li><strong>CI/CDパイプライン</strong>：デプロイ時間の短縮</li><li><strong>本番環境</strong>：ストレージコストの削減</li><li><strong>開発チーム</strong>：イメージ共有の高速化</li></ul><h2><span>なぜPythonでもマルチステージビルドの効果があるのか</span></h2><p>記事の頭でも気になっていたインタプリター言語でもなぜマルチステージビルドで容量を削減できるのか少し調べてみました。</p><p>Pythonのエコシステムでは結構コンパイル処理が発生しているようで、C / C++で書かれている部分を含んでいることが要因の一つでした。</p><p>具体的には以下のようなライブラリはC拡張コンパイルをしているようです。</p><pre><code>numpy      # 線形代数計算（BLAS/LAPACK）
+pandas     # データ処理の高速化
+pillow     # 画像処理
+lxml       # XML/HTMLパーサー
+psycopg2   # PostgreSQLドライバー
+cryptography # 暗号化ライブラリ
+uwsgi      # WSGIサーバー
+</code></pre><p>それによって作成される以下のような不要なファイルやコンパイルツールを含めずにイメージを作成することができるためマルチステービルドの恩恵をしっかりと受けられているのだと思います。</p><ul><li><strong>gcc/g++とその依存関係</strong></li><li><strong>apt-getのキャッシュ</strong>:</li><li><strong>ビルド時の一時ファイル</strong></li><li><strong>その他のビルドツール</strong></li></ul><h2><span>まとめ</span></h2><p>マルチステージビルドは、少しの工夫で大きな効果を得られる優秀な技術です。コンパイル言語ほどではないですが、Pythonのようなインタプリター言語でもマルチステージビルドの効果を確認することができました。</p><p>またアプリケーション実行に最小の要素が何なのかわからないと構築が難しいですが、明らかに必要のないものを含めない状態でイメージを作成するだけでも効果があるので積極的に取り入れて段階的に最適化させていくのが良いかなと思いました。</p><p>ではまた</p><p><!-- notionvc: c3f0bda4-c618-47d0-a809-32f98bddd444 --></p><!-- Anyway Feedback Container //--><div>ご覧いただきありがとうございます！
+
+<span>この投稿はお役に立ちましたか？</span><br/><br/><a href="#afb-post-48218">役に立った</a><a href="#afb-post-48218">役に立たなかった</a><br/><br/><span>0人がこの投稿は役に立ったと言っています。</span><input/><input/></div><!-- //Anyway Feedback Container --></section>
