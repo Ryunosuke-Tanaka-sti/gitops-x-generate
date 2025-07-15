@@ -14,81 +14,107 @@ jobs:
     steps:
       - name: Extract issue number from PR body
         id: extract_issue
-        run: |
-          # PRの本文を取得
-          pr_body="${{ github.event.pull_request.body }}"
-          echo "PR Body: $pr_body"
-          
-          # "Closes #123" や "Fixes #123" などの形式でIssue番号を抽出
-          # 複数のキーワードに対応（より安全な方法）
-          issue_number=""
-          
-          # 各パターンを個別にチェック
-          if echo "$pr_body" | grep -qi "closes #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "closes #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "close #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "close #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "closed #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "closed #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "fixes #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "fixes #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "fix #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "fix #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "fixed #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "fixed #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "resolves #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "resolves #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "resolve #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "resolve #[0-9]\+" | head -1 | sed 's/.*#//')
-          elif echo "$pr_body" | grep -qi "resolved #[0-9]"; then
-            issue_number=$(echo "$pr_body" | grep -oi "resolved #[0-9]\+" | head -1 | sed 's/.*#//')
-          fi
-          
-          if [ -z "$issue_number" ]; then
-            echo "No issue reference found in PR body"
-            echo "issue_found=false" >> $GITHUB_OUTPUT
-          else
-            echo "Found issue number: $issue_number"
-            echo "issue_found=true" >> $GITHUB_OUTPUT
-            echo "issue_number=$issue_number" >> $GITHUB_OUTPUT
-          fi
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prBody = context.payload.pull_request.body || '';
+            console.log('Processing PR body for issue references...');
+            
+            // 各種パターンに対応した正規表現
+            const patterns = [
+              /closes\s+#(\d+)/i,
+              /close\s+#(\d+)/i,
+              /closed\s+#(\d+)/i,
+              /fixes\s+#(\d+)/i,
+              /fix\s+#(\d+)/i,
+              /fixed\s+#(\d+)/i,
+              /resolves\s+#(\d+)/i,
+              /resolve\s+#(\d+)/i,
+              /resolved\s+#(\d+)/i
+            ];
+            
+            let issueNumber = null;
+            
+            // 各パターンをチェック
+            for (const pattern of patterns) {
+              const match = prBody.match(pattern);
+              if (match) {
+                issueNumber = match[1];
+                console.log(`Found issue reference: ${match[0]} -> Issue #${issueNumber}`);
+                break;
+              }
+            }
+            
+            if (issueNumber) {
+              core.setOutput('issue_found', 'true');
+              core.setOutput('issue_number', issueNumber);
+              console.log(`✅ Issue #${issueNumber} will be closed when PR is processed`);
+            } else {
+              core.setOutput('issue_found', 'false');
+              console.log('ℹ️ No issue reference found in PR body');
+            }
+            
+            return {
+              found: !!issueNumber,
+              number: issueNumber
+            };
 
       - name: Close related issue
         if: steps.extract_issue.outputs.issue_found == 'true'
-        run: |
-          issue_number="${{ steps.extract_issue.outputs.issue_number }}"
-          pr_number="${{ github.event.pull_request.number }}"
-          pr_merged="${{ github.event.pull_request.merged }}"
-          
-          # PRの状態に応じてクローズメッセージを決定
-          if [ "$pr_merged" = "true" ]; then
-            close_reason="completed"
-            comment_body="🎉 このIssueは関連するPR #${pr_number} がマージされたため自動的にクローズされました。"
-          else
-            close_reason="not_planned"
-            comment_body="❌ このIssueは関連するPR #${pr_number} がクローズされたため自動的にクローズされました。"
-          fi
-          
-          # Issueにコメントを追加
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            /repos/${{ github.repository }}/issues/${issue_number}/comments \
-            -f body="$comment_body"
-          
-          # Issueをクローズ
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            /repos/${{ github.repository }}/issues/${issue_number} \
-            -f state="closed" \
-            -f state_reason="$close_reason"
-          
-          echo "✅ Issue #${issue_number} has been closed"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ steps.extract_issue.outputs.issue_number }};
+            const prNumber = context.payload.pull_request.number;
+            const prMerged = context.payload.pull_request.merged;
+            const { owner, repo } = context.repo;
+            
+            console.log(`Processing issue closure for Issue #${issueNumber} related to PR #${prNumber}`);
+            console.log(`PR merged status: ${prMerged}`);
+            
+            // PRの状態に応じてクローズメッセージを決定
+            let closeReason, commentBody;
+            if (prMerged) {
+              closeReason = 'completed';
+              commentBody = `🎉 このIssueは関連するPR #${prNumber} がマージされたため自動的にクローズされました。`;
+            } else {
+              closeReason = 'not_planned';
+              commentBody = `❌ このIssueは関連するPR #${prNumber} がクローズされたため自動的にクローズされました。`;
+            }
+            
+            try {
+              // Issueにコメントを追加
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: commentBody
+              });
+              
+              console.log(`✅ Comment added to Issue #${issueNumber}`);
+              
+              // Issueをクローズ
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                state: 'closed',
+                state_reason: closeReason
+              });
+              
+              console.log(`✅ Issue #${issueNumber} has been closed with reason: ${closeReason}`);
+              
+              return {
+                success: true,
+                issue_number: issueNumber,
+                action: prMerged ? 'merged_and_closed' : 'closed',
+                comment_added: true
+              };
+              
+            } catch (error) {
+              console.error(`❌ Error processing Issue #${issueNumber}:`, error);
+              throw error;
+            }
 
       - name: Log completion
         run: |
