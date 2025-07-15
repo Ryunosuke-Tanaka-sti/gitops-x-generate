@@ -35,7 +35,8 @@
     },
     "postCreateCommand": "pip install --upgrade pip && pip install -r requirements.txt",
     "features": {
-        "ghcr.io/devcontainers/features/git:1": {}
+        "ghcr.io/devcontainers/features/azure-cli": {},
+        "ghcr.io/devcontainers/features/github-cli": {}
     },
     "forwardPorts": [
         8000

@@ -34,7 +34,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 
 class XPostGeneratorWithCache:
@@ -64,6 +63,7 @@ class XPostGeneratorWithCache:
         # 環境変数とAPI設定の初期化
         self.api_key = os.environ.get("ANTHROPIC_API_KEY", "dummy-key-for-testing")
         self.debug_mode = os.environ.get("DEBUG_MODE", "false").lower() == "true"
+        self.html_file_path = os.environ.get("HTML_FILE")
 
         # デバッグ情報の出力
         if self.debug_mode:
@@ -74,6 +74,21 @@ class XPostGeneratorWithCache:
                     f"{'設定済み' if self.api_key != 'dummy-key-for-testing' else 'ダミー'}"
                 )
             )
+            print(f"📄 HTMLファイルパス: {self.html_file_path or '未指定'}")
+
+        # HTMLファイルコンテンツの読み込み（必須）
+        if not self.html_file_path:
+            raise ValueError(
+                "HTML_FILE環境変数が設定されていません。"
+                "fetch_html_from_techlab.pyで生成されたHTMLファイルが必要です。"
+            )
+
+        try:
+            self.html_content = self._load_html_content()
+            print("✅ HTMLファイル読み込み完了")
+        except Exception as e:
+            print(f"❌ HTMLファイル読み込みエラー: {e}")
+            raise
 
         # システムプロンプトの読み込み（外部ファイルから）
         try:
@@ -103,6 +118,77 @@ class XPostGeneratorWithCache:
         if self.debug_mode:
             print("💰 料金設定読み込み完了")
             print(f"📊 推定キャッシュサイズ: {self.estimated_cache_tokens:,} トークン")
+
+    def _load_html_content(self) -> str:
+        """
+        HTMLファイルからコンテンツを読み込み
+
+        fetch_html_from_techlab.pyで生成されたHTMLファイルを読み込みます。
+        ファイルが存在しない場合は例外を発生させます。
+
+        Returns:
+            str: HTMLコンテンツ
+
+        Raises:
+            FileNotFoundError: HTMLファイルが見つからない場合
+            ValueError: ファイル内容が空または無効な場合
+        """
+
+        if not self.html_file_path:
+            raise ValueError("HTMLファイルパスが指定されていません")
+
+        html_file_path = Path(self.html_file_path)
+
+        print(f"📄 HTMLファイル読み込み: {html_file_path}")
+
+        # ファイル存在確認
+        if not html_file_path.exists():
+            error_msg = f"""
+                        ❌ HTMLファイルが見つかりません: {html_file_path}
+
+                        このファイルは fetch_html_from_techlab.py で生成される必要があります。
+                        fetch_html_from_techlab.py が正常に実行されたか確認してください。
+
+                        現在のディレクトリ: {os.getcwd()}
+                        """
+            print(error_msg)
+            raise FileNotFoundError(error_msg)
+
+        # ファイル読み込み
+        try:
+            with open(html_file_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+
+            # 内容の基本検証
+            if not content:
+                raise ValueError(f"HTMLファイルが空です: {html_file_path}")
+
+            # ファイル情報の出力
+            file_size = len(content.encode("utf-8"))
+            line_count = len(content.splitlines())
+
+            print("📊 HTMLコンテンツ情報:")
+            print(f"   - ファイルサイズ: {file_size:,} bytes")
+            print(f"   - 行数: {line_count:,} 行")
+            print(f"   - 文字数: {len(content):,} 文字")
+
+            if self.debug_mode:
+                print("📝 HTMLコンテンツ先頭プレビュー:")
+                preview_lines = content.splitlines()[:5]
+                for i, line in enumerate(preview_lines, 1):
+                    print(f"   {i}: {line[:80]}{'...' if len(line) > 80 else ''}")
+
+            return content
+
+        except UnicodeDecodeError as e:
+            error_msg = f"ファイルエンコーディングエラー: {e}\nUTF-8エンコーディングで保存してください"
+            print(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+
+        except Exception as e:
+            error_msg = f"HTMLファイル読み込みエラー: {e}"
+            print(f"❌ {error_msg}")
+            raise
 
     def _load_system_prompt_from_file(self) -> str:
         """
@@ -154,11 +240,11 @@ class XPostGeneratorWithCache:
                     f"システムプロンプトファイルが空です: {prompt_file_path}"
                 )
 
-            if len(content) < 1000:
-                print(
-                    f"⚠️  警告: システムプロンプトが短すぎる可能性があります（{len(content)} 文字）"
-                )
-                print("   プロンプトキャッシュの効果が限定的になる可能性があります")
+            # if len(content) < 1000:
+            #     print(
+            #         f"⚠️  警告: システムプロンプトが短すぎる可能性があります（{len(content)} 文字）"
+            #     )
+            #     print("   プロンプトキャッシュの効果が限定的になる可能性があります")
 
             # ファイル情報の出力
             file_size = len(content.encode("utf-8"))
@@ -187,16 +273,13 @@ class XPostGeneratorWithCache:
             print(f"❌ {error_msg}")
             raise
 
-    def _simulate_api_call(self, url: str) -> Dict[str, Any]:
+    def _simulate_api_call(self) -> Dict[str, Any]:
         """
         Claude APIコールをシミュレート（ダミー実装）
 
         実際のAPI通信は行わず、ダミーのレスポンスを生成します。
         プロンプトキャッシュの効果とコスト計算を正確にシミュレートします。
-        Web検索とWeb fetchの処理も含めてシミュレートします。
-
-        Args:
-            url (str): 分析対象のブログ記事URL
+        事前に取得されたHTMLコンテンツを使用してシミュレートします。
 
         Returns:
             Dict[str, Any]: APIレスポンスのシミュレート結果
@@ -205,20 +288,26 @@ class XPostGeneratorWithCache:
         print("🔄 Claude API呼び出しシミュレート開始...")
         print("📡 注意: 実際のAPI通信は行いません（ダミー実装）")
 
+        # HTMLコンテンツの検証と使用
+        if not self.html_content:
+            raise ValueError("HTMLコンテンツが読み込まれていません")
+
+        print("📄 事前取得済みHTMLコンテンツを使用")
+        print(f"   - HTMLファイル: {self.html_file_path}")
+        print(f"   - コンテンツサイズ: {len(self.html_content):,} 文字")
+        html_fetch_tokens = len(self.html_content) // 4  # 概算トークン数
+
         # Web検索のシミュレート（3回の検索を想定）
         print("🔍 Web検索シミュレート中...")
         search_queries = [
-            f"{urlparse(url).netloc} 技術 ハッシュタグ",
+            "技術記事 ハッシュタグ トレンド",
             "エンジニア X投稿 効果的",
             "プログラミング 自動化 トレンド 2025",
         ]
 
         for i, query in enumerate(search_queries, 1):
             print(f"   検索 {i}: {query}")
-            time.sleep(0.5)  # 検索処理時間のシミュレート
-
-        print("📄 Web fetch シミュレート中...")
-        time.sleep(1)  # Web fetch処理時間のシミュレート
+            time.sleep(0.3)  # 検索処理時間のシミュレート（短縮）
 
         # プロンプトキャッシュの処理シミュレート
         if self.cache_enabled:
@@ -236,7 +325,7 @@ class XPostGeneratorWithCache:
         # Claude API処理時間をシミュレート（実際のレスポンス時間を模擬）
         print("🧠 Claude API処理中...")
         processing_steps = [
-            "記事内容の解析",
+            "HTMLコンテンツの解析",
             "技術要素の抽出",
             "品質評価の実行",
             "ハッシュタグの分析",
@@ -254,11 +343,15 @@ class XPostGeneratorWithCache:
             "cached_tokens": self.estimated_cache_tokens if self.cache_enabled else 0,
             # 新規で処理するトークン数の内訳
             "web_search_tokens": 15000,  # Web検索結果（3回分）
-            "web_fetch_tokens": 3500,  # Web fetch結果
+            "html_content_tokens": html_fetch_tokens,  # HTML fetch結果（実際のサイズ基準）
             "user_input_tokens": 500,  # ユーザー入力（URL等）
-            "non_cached_tokens": 19000,  # 上記の合計
+            "non_cached_tokens": 15500 + html_fetch_tokens,  # 上記の合計
             # 総入力トークン数
-            "total_input_tokens": 39000,  # キャッシュ + 新規
+            "total_input_tokens": (
+                15500
+                + html_fetch_tokens
+                + (self.estimated_cache_tokens if self.cache_enabled else 0)
+            ),
         }
 
         # 出力トークン数（生成される投稿パターンの分量）
@@ -268,7 +361,7 @@ class XPostGeneratorWithCache:
         costs = self._calculate_costs(input_tokens, output_tokens)
 
         # ダミーレスポンス生成（実際の品質に近いコンテンツ）
-        response_content = self._generate_dummy_response(url)
+        response_content = self._generate_dummy_response()
 
         print("✅ API呼び出しシミュレート完了")
 
@@ -280,6 +373,7 @@ class XPostGeneratorWithCache:
             },
             "costs": costs,
             "cache_used": self.cache_enabled,
+            "html_source": "pre_fetched" if self.html_content else "web_fetch",
             "api_call_simulated": True,  # ダミー実装フラグ
             "processing_time": time.time(),  # 処理完了時刻
         }
@@ -363,30 +457,27 @@ class XPostGeneratorWithCache:
             "yearly_savings_jpy": yearly_savings * 150,
         }
 
-    def _generate_dummy_response(self, url: str) -> str:
+    def _generate_dummy_response(self) -> str:
         """
         ダミーレスポンス生成
 
         実際のClaude APIが生成するような高品質なコンテンツを
-        ダミーとして生成します。URLのドメインに応じて内容を調整し、
+        ダミーとして生成します。HTMLコンテンツの内容に応じて内容を調整し、
         実際の使用場面に近い品質を提供します。
-
-        Args:
-            url (str): 分析対象のURL
 
         Returns:
             str: 生成されたMarkdownコンテンツ
         """
 
-        # URLからドメインを抽出してコンテンツを調整
-        parsed_url = urlparse(url)
-        domain = parsed_url.netloc
+        print("📝 ダミーレスポンス生成中")
 
-        print(f"📝 ダミーレスポンス生成中: {domain}")
+        # HTMLコンテンツを活用
+        html_size = len(self.html_content)
+        print(f"   HTMLコンテンツを活用: {html_size:,} 文字")
 
-        # ドメインに応じた技術要素の推定
-        # 実際の実装では、web_fetchで取得した内容から自動抽出
-        if "sios" in domain.lower():
+        # HTMLコンテンツから技術要素を推定（簡易版）
+        content_lower = self.html_content.lower()
+        if "dotfiles" in content_lower or "powershell" in content_lower:
             tech_elements = [
                 "Windows環境でのdotfiles管理システム",
                 "PowerShellスクリプトによるシンボリックリンク自動作成",
@@ -402,7 +493,7 @@ class XPostGeneratorWithCache:
             overall_rating = "A"
             implementation_level = "本格実装"
             target_audience = "中級者"
-        elif "github" in domain.lower():
+        elif "github" in content_lower or "actions" in content_lower:
             tech_elements = [
                 "GitHubベースの開発ワークフロー最適化",
                 "CI/CD パイプラインの自動化",
@@ -417,17 +508,17 @@ class XPostGeneratorWithCache:
             overall_rating = "A"
             implementation_level = "本格実装"
             target_audience = "中級者"
-        elif "qiita" in domain.lower():
+        elif "python" in content_lower or "javascript" in content_lower:
             tech_elements = [
-                "日本のエンジニアコミュニティ向け技術情報",
+                "プログラミング言語の実践的活用",
                 "実践的なコーディング手法",
                 "トレンド技術の活用事例",
                 "開発効率化のベストプラクティス",
             ]
             limitations = [
-                "日本語環境での利用が前提",
-                "特定のライブラリ・フレームワークバージョンに依存",
+                "特定の言語・フレームワークバージョンに依存",
                 "環境構築の前提条件が必要",
+                "学習コストと習得時間が必要",
             ]
             overall_rating = "B"
             implementation_level = "基本実装"
@@ -453,73 +544,74 @@ class XPostGeneratorWithCache:
         generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Markdownコンテンツの生成
-        content = f"""
-                    # ブログ記事分析・X投稿パターン
+        sample_url = "https://example.com/blog-post"  # サンプルURL
+        content = f"""# ブログ記事分析・X投稿パターン
 
-                    ## 📊 ブログの評価
+## 📊 ブログの評価
 
-                    | 項目 | 評価 |
-                    |------|------|
-                    | 総合評価 | {overall_rating} |
-                    | 技術的正確性 | ⭐⭐⭐⭐⭐ (5点満点) |
-                    | 実装レベル | {implementation_level} |
-                    | 対象読者 | {target_audience} |
-                    | 実用性 | ⭐⭐⭐⭐⭐ (5点満点) |
+| 項目 | 評価 |
+|------|------|
+| 総合評価 | {overall_rating} |
+| 技術的正確性 | ⭐⭐⭐⭐⭐ (5点満点) |
+| 実装レベル | {implementation_level} |
+| 対象読者 | {target_audience} |
+| 実用性 | ⭐⭐⭐⭐⭐ (5点満点) |
 
-                    ### 主要な技術要素
-                    {chr(10).join(f"- {element}" for element in tech_elements)}
+### 主要な技術要素
+{chr(10).join(f"- {element}" for element in tech_elements)}
 
-                    ### 注意事項・制限
-                    {chr(10).join(f"- {limitation}" for limitation in limitations)}
+### 注意事項・制限
+{chr(10).join(f"- {limitation}" for limitation in limitations)}
 
-                    ## 🐦 X投稿パターン
+## 🐦 X投稿パターン
 
-                    ### Aパターン（効果重視・数値訴求型）
-                    ```
-                    {url}
+### Aパターン（効果重視・数値訴求型）
+```
+{sample_url}
 
-                    🚀 PC環境構築が30分→3分に短縮！Windows向けdotfiles管理術
-                    📝 PowerShellスクリプト1つで設定ファイルを自動配置
-                    ⚡ 技術スタック: PowerShell VSCode WindowsTerminal SSH
-                    🔧 シンボリックリンクで設定変更が即座に反映される仕組み
-                    #dotfiles #PowerShell #Windows #自動化 #環境構築 #効率化
-                    ```
-                    **投稿推奨時間**: 火曜日21:00（エンジニアの学習ピークタイム・劇的効果訴求に最適）
+🚀 PC環境構築が30分→3分に短縮！Windows向けdotfiles管理術
+📝 PowerShellスクリプト1つで設定ファイルを自動配置
+⚡ 技術スタック: PowerShell VSCode WindowsTerminal SSH
+🔧 シンボリックリンクで設定変更が即座に反映される仕組み
+#dotfiles #PowerShell #Windows #自動化 #環境構築 #効率化
+```
+**投稿推奨時間**: 火曜日21:00（エンジニアの学習ピークタイム・劇的効果訴求に最適）
 
-                    ### Bパターン（課題共感・解決提案型）
-                    ```
-                    {url}
+### Bパターン（課題共感・解決提案型）
+```
+{sample_url}
 
-                    😰 新しいPCセットアップのたびに同じ設定を繰り返してませんか？
-                    💡 dotfiles管理を使えばPowerShellスクリプト1つで環境復元
-                    ⚡ Windows Terminal、VSCode、SSH設定を一括管理
-                    🎯 PC故障やリプレース時も安心の開発環境構築術
-                    #dotfiles #Windows #環境構築 #PowerShell #自動化 #効率化
-                    ```
-                    **投稿推奨時間**: 水曜日12:00（昼休み時間・共感型アプローチで気軽チェック）
+😰 新しいPCセットアップのたびに同じ設定を繰り返してませんか？
+💡 dotfiles管理を使えばPowerShellスクリプト1つで環境復元
+⚡ Windows Terminal、VSCode、SSH設定を一括管理
+🎯 PC故障やリプレース時も安心の開発環境構築術
+#dotfiles #Windows #環境構築 #PowerShell #自動化 #効率化
+```
+**投稿推奨時間**: 水曜日12:00（昼休み時間・共感型アプローチで気軽チェック）
 
-                    ### Cパターン（技術トレンド・学習促進型）
-                    ```
-                    {url}
+### Cパターン（技術トレンド・学習促進型）
+```
+{sample_url}
 
-                    🔥 2025年注目のWindows開発環境管理手法
-                    📚 dotfiles + PowerShellでプロレベルの設定管理を実現
-                    ⭐ AIツール活用でスクリプト作成もサクッと完了
-                    🚀 GitHubで設定を共有してチーム全体の生産性向上
-                    #dotfiles #PowerShell #Windows #AI活用 #開発環境 #生産性
-                    ```
-                    **投稿推奨時間**: 火曜日21:00（最新技術トレンド・学習意欲が高い時間帯）
+🔥 2025年注目のWindows開発環境管理手法
+📚 dotfiles + PowerShellでプロレベルの設定管理を実現
+⭐ AIツール活用でスクリプト作成もサクッと完了
+🚀 GitHubで設定を共有してチーム全体の生産性向上
+#dotfiles #PowerShell #Windows #AI活用 #開発環境 #生産性
+```
+**投稿推奨時間**: 火曜日21:00（最新技術トレンド・学習意欲が高い時間帯）
 
-                    ---
+---
 
-                    **生成情報**
-                    - 対象URL: {url}
-                    - ドメイン: {domain}
-                    - 生成日時: {generation_time}
-                    - プロンプトキャッシュ: {'使用' if self.cache_enabled else '未使用'}
-                    - 生成方式: ダミー実装（API検証前）
-                    - システムプロンプト: 外部ファイル読み込み
-                    """
+**生成情報**
+- HTMLファイル: {self.html_file_path}
+- 生成日時: {generation_time}
+- プロンプトキャッシュ: {'使用' if self.cache_enabled else '未使用'}
+- 生成方式: ダミー実装（API検証前）
+- システムプロンプト: 外部ファイル読み込み
+- HTMLソース: 事前取得済みファイル
+- HTMLサイズ: {len(self.html_content):,} 文字
+"""
 
         if self.debug_mode:
             print("📄 生成コンテンツ統計:")
@@ -529,41 +621,38 @@ class XPostGeneratorWithCache:
 
         return content
 
-    def generate_posts(self, url: str) -> Dict[str, Any]:
+    def generate_posts_from_html(self) -> Dict[str, Any]:
         """
-        X投稿パターンを生成（メイン処理）
+        HTMLファイルからX投稿パターンを生成（メイン処理）
 
-        URLを受け取り、ブログ記事を分析してX投稿パターンを生成します。
+        既に読み込まれたHTMLコンテンツを分析してX投稿パターンを生成します。
         プロンプトキャッシュを活用してコスト効率化を図ります。
 
         処理フロー:
-        1. URL検証
-        2. APIコールシミュレート（Web検索・fetch・Claude API）
+        1. HTMLコンテンツ検証
+        2. APIコールシミュレート（Claude API）
         3. コスト計算
         4. レスポンス生成
-
-        Args:
-            url (str): 分析対象のブログ記事URL
 
         Returns:
             Dict[str, Any]: 生成結果（コンテンツ、コスト、トークン使用量等）
 
         Raises:
-            ValueError: URLが無効な場合
+            ValueError: HTMLコンテンツが無効な場合
             Exception: 生成処理中にエラーが発生した場合
         """
 
         print("🚀 X投稿パターン生成開始...")
         print("=" * 60)
 
-        # URL基本検証
-        if not url or not url.startswith(("http://", "https://")):
-            error_msg = f"無効なURL: {url}"
+        # HTMLコンテンツ検証
+        if not self.html_content:
+            error_msg = "HTMLコンテンツが読み込まれていません"
             print(f"❌ {error_msg}")
             raise ValueError(error_msg)
 
         # 生成設定の表示
-        print(f"📄 対象URL: {url}")
+        print(f"📄 HTMLファイル: {self.html_file_path}")
         print(f"🧠 プロンプトキャッシュ: {'有効' if self.cache_enabled else '無効'}")
         print("💡 実装方式: ダミー（API通信検証前）")
         print(f"🔧 デバッグモード: {'有効' if self.debug_mode else '無効'}")
@@ -573,7 +662,7 @@ class XPostGeneratorWithCache:
 
         try:
             # APIコールシミュレート
-            result = self._simulate_api_call(url)
+            result = self._simulate_api_call()
 
             # 処理時間の計算
             processing_time = time.time() - start_time
@@ -614,11 +703,19 @@ class XPostGeneratorWithCache:
             print("\n📊 トークン使用量詳細:")
             print(f"   - キャッシュ済み: {tokens['cached_tokens']:,}")
             print(f"   - Web検索結果: {tokens['web_search_tokens']:,}")
-            print(f"   - Web fetch結果: {tokens['web_fetch_tokens']:,}")
+            print(f"   - HTMLコンテンツ: {tokens['html_content_tokens']:,}")
             print(f"   - ユーザー入力: {tokens['user_input_tokens']:,}")
             print(f"   - 新規入力合計: {tokens['non_cached_tokens']:,}")
             print(f"   - 総入力: {tokens['total_input_tokens']:,}")
             print(f"   - 出力: {output_tokens:,}")
+
+            # HTML取得方法の表示
+            html_source = result.get("html_source", "unknown")
+            html_source_text = {
+                "pre_fetched": "事前取得済みHTMLファイル",
+                "web_fetch": "Web fetch（フォールバック）",
+            }.get(html_source, "不明")
+            print(f"   - HTML取得方法: {html_source_text}")
 
             # 処理パフォーマンス情報
             print("\n⏱️  処理パフォーマンス:")
@@ -644,7 +741,7 @@ class XPostGeneratorWithCache:
         self,
         content: str,
         filename: str,
-        url: str,
+        html_file_path: str,
         metadata: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -656,7 +753,7 @@ class XPostGeneratorWithCache:
         Args:
             content (str): 生成されたMarkdownコンテンツ
             filename (str): 保存先ファイルパス
-            url (str): 分析対象のURL
+            html_file_path (str): 分析対象のHTMLファイルパス
             metadata (Optional[Dict[str, Any]]): 生成時のメタデータ
 
         Raises:
@@ -669,8 +766,8 @@ class XPostGeneratorWithCache:
             raise ValueError("保存するコンテンツが空です")
         if not filename:
             raise ValueError("ファイル名が指定されていません")
-        if not url:
-            raise ValueError("URLが指定されていません")
+        if not html_file_path:
+            raise ValueError("HTMLファイルパスが指定されていません")
 
         print(f"💾 ファイル保存開始: {filename}")
 
@@ -688,114 +785,115 @@ class XPostGeneratorWithCache:
         input_tokens = token_usage.get("input_tokens", {})
 
         # YAML Frontmatterの生成（詳細な生成情報を記録）
-        frontmatter = f"""---
-                        # =================================================================
-                        # X投稿自動生成システム - 生成ファイルメタデータ
-                        # =================================================================
+        frontmatter = f"""
+---
+# =================================================================
+# X投稿自動生成システム - 生成ファイルメタデータ
+# =================================================================
 
-                        # 生成基本情報
-                        url: "{url}"
-                        generated_at: "{datetime.now().isoformat()}"
-                        generator: "Claude API X Posts Generator (Cache Enabled)"
-                        generator_version: "v1.0.0"
-                        system_prompt_source: "prompts/system_prompt.md"
+# 生成基本情報
+html_file: "{html_file_path}"
+generated_at: "{datetime.now().isoformat()}"
+generator: "Claude API X Posts Generator (Cache Enabled)"
+generator_version: "v1.0.0"
+system_prompt_source: "prompts/system_prompt.md"
 
-                        # プロンプトキャッシュ情報
-                        prompt_cache:
-                        enabled: {str(metadata.get('cache_used', False)).lower()}
-                        cached_tokens: {input_tokens.get('cached_tokens', 0)}
-                        estimated_cache_size: {self.estimated_cache_tokens}
-                        cache_efficiency: {(
-                            input_tokens.get('cached_tokens', 0)
-                            / self.estimated_cache_tokens * 100
-                            if self.estimated_cache_tokens > 0 else 0
-                        ):.1f}%
+# プロンプトキャッシュ情報
+prompt_cache:
+enabled: {str(metadata.get('cache_used', False)).lower()}
+cached_tokens: {input_tokens.get('cached_tokens', 0)}
+estimated_cache_size: {self.estimated_cache_tokens}
+cache_efficiency: {(
+    input_tokens.get('cached_tokens', 0)
+    / self.estimated_cache_tokens * 100
+    if self.estimated_cache_tokens > 0 else 0
+):.1f}%
 
-                        # コスト情報（USD）
-                        costs_usd:
-                        cache_cost: {costs.get('cache_cost', 0):.6f}
-                        input_cost: {costs.get('input_cost', 0):.6f}
-                        output_cost: {costs.get('output_cost', 0):.6f}
-                        total_cost: {costs.get('total_cost', 0):.6f}
-                        cost_without_cache: {costs.get('cost_without_cache', 0):.6f}
-                        cost_reduction: {costs.get('cost_reduction', 0):.6f}
+# コスト情報（USD）
+costs_usd:
+cache_cost: {costs.get('cache_cost', 0):.6f}
+input_cost: {costs.get('input_cost', 0):.6f}
+output_cost: {costs.get('output_cost', 0):.6f}
+total_cost: {costs.get('total_cost', 0):.6f}
+cost_without_cache: {costs.get('cost_without_cache', 0):.6f}
+cost_reduction: {costs.get('cost_reduction', 0):.6f}
 
-                        # コスト情報（JPY、1USD=150JPY想定）
-                        costs_jpy:
-                        total_cost: {costs.get('total_cost_jpy', 0):.1f}
-                        cost_reduction: {costs.get('cost_reduction', 0) * 150:.1f}
-                        monthly_savings: {costs.get('monthly_savings_jpy', 0):.0f}
-                        yearly_savings: {costs.get('yearly_savings_jpy', 0):.0f}
+# コスト情報（JPY、1USD=150JPY想定）
+costs_jpy:
+total_cost: {costs.get('total_cost_jpy', 0):.1f}
+cost_reduction: {costs.get('cost_reduction', 0) * 150:.1f}
+monthly_savings: {costs.get('monthly_savings_jpy', 0):.0f}
+yearly_savings: {costs.get('yearly_savings_jpy', 0):.0f}
 
-                        # コスト削減効果
-                        cost_efficiency:
-                        reduction_percent: {costs.get('cost_reduction_percent', 0):.1f}%
-                        monthly_usage_assumption: 50  # 月間実行回数想定
-                        yearly_usage_assumption: 600  # 年間実行回数想定
+# コスト削減効果
+cost_efficiency:
+reduction_percent: {costs.get('cost_reduction_percent', 0):.1f}%
+monthly_usage_assumption: 50  # 月間実行回数想定
+yearly_usage_assumption: 600  # 年間実行回数想定
 
-                        # トークン使用量詳細
-                        token_usage:
-                        input:
-                            cached: {input_tokens.get('cached_tokens', 0)}
-                            web_search: {input_tokens.get('web_search_tokens', 0)}
-                            web_fetch: {input_tokens.get('web_fetch_tokens', 0)}
-                            user_input: {input_tokens.get('user_input_tokens', 0)}
-                            non_cached_total: {input_tokens.get('non_cached_tokens', 0)}
-                            total: {input_tokens.get('total_input_tokens', 0)}
-                        output: {token_usage.get('output_tokens', 0)}
-                        processing_efficiency: {(
-                            token_usage.get('output_tokens', 0) /
-                            input_tokens.get('total_input_tokens', 1)
-                        ):.4f}  # 出力/入力比率
+# トークン使用量詳細
+token_usage:
+input:
+    cached: {input_tokens.get('cached_tokens', 0)}
+    web_search: {input_tokens.get('web_search_tokens', 0)}
+    web_fetch: {input_tokens.get('web_fetch_tokens', 0)}
+    user_input: {input_tokens.get('user_input_tokens', 0)}
+    non_cached_total: {input_tokens.get('non_cached_tokens', 0)}
+    total: {input_tokens.get('total_input_tokens', 0)}
+output: {token_usage.get('output_tokens', 0)}
+processing_efficiency: {(
+    token_usage.get('output_tokens', 0) /
+    input_tokens.get('total_input_tokens', 1)
+):.4f}  # 出力/入力比率
 
-                        # パフォーマンス情報
-                        performance:
-                        processing_time_seconds: {(
-                            metadata.get('processing_time_seconds', 0)
-                        ):.2f}
-                        tokens_per_second: {(
-                            input_tokens.get('total_input_tokens', 0) /
-                            max(metadata.get('processing_time_seconds', 1), 0.1)
-                        ):.0f}
-                        api_call_simulated: {(
-                            str(metadata.get('api_call_simulated', True)).lower()
-                        )}
+# パフォーマンス情報
+performance:
+processing_time_seconds: {(
+    metadata.get('processing_time_seconds', 0)
+):.2f}
+tokens_per_second: {(
+    input_tokens.get('total_input_tokens', 0) /
+    max(metadata.get('processing_time_seconds', 1), 0.1)
+):.0f}
+api_call_simulated: {(
+    str(metadata.get('api_call_simulated', True)).lower()
+)}
 
-                        # 品質保証チェック
-                        quality_assurance:
-                        link_card_optimized: true      # URLを投稿文冒頭に配置
-                        hashtag_optimized: true        # エンジニア向けハッシュタグ選定
-                        engineer_focused: true         # エンジニア向けコンテンツ最適化
-                        cost_optimized: true           # プロンプトキャッシュによるコスト最適化
-                        three_pattern_generated: true  # 3パターンの投稿文生成
-                        timing_optimized: true         # 投稿時間最適化
+# 品質保証チェック
+quality_assurance:
+link_card_optimized: true      # URLを投稿文冒頭に配置
+hashtag_optimized: true        # エンジニア向けハッシュタグ選定
+engineer_focused: true         # エンジニア向けコンテンツ最適化
+cost_optimized: true           # プロンプトキャッシュによるコスト最適化
+three_pattern_generated: true  # 3パターンの投稿文生成
+timing_optimized: true         # 投稿時間最適化
 
-                        # システム情報
-                        system_info:
-                        api_model: "Claude Sonnet 4"
-                        pricing_model: "2025-07-06"
-                        cache_strategy: "Prompt Cache (20k tokens)"
-                        output_format: "Markdown with YAML frontmatter"
-                        debug_mode: {str(self.debug_mode).lower()}
+# システム情報
+system_info:
+api_model: "Claude Sonnet 4"
+pricing_model: "2025-07-06"
+cache_strategy: "Prompt Cache (20k tokens)"
+output_format: "Markdown with YAML frontmatter"
+debug_mode: {str(self.debug_mode).lower()}
 
-                        # ファイル情報
-                        file_info:
-                        original_url_domain: "{urlparse(url).netloc}"
-                        content_language: "ja"  # 日本語
-                        target_platform: "X (Twitter)"
-                        target_audience: "Japanese Engineers"
+# ファイル情報
+file_info:
+html_file_path: "{html_file_path}"
+content_language: "ja"  # 日本語
+target_platform: "X (Twitter)"
+target_audience: "Japanese Engineers"
 
-                        # 更新履歴（将来の更新時に使用）
-                        revision_history:
-                        - version: "1.0.0"
-                            date: "{datetime.now().strftime('%Y-%m-%d')}"
-                            changes: "初回生成"
-                        ---
+# 更新履歴（将来の更新時に使用）
+revision_history:
+- version: "1.0.0"
+    date: "{datetime.now().strftime('%Y-%m-%d')}"
+    changes: "初回生成"
+---
 
-                        """
+"""
 
         # コンテンツとメタデータを結合
-        full_content = frontmatter + content
+        full_content = content + frontmatter
 
         try:
             # ファイルに書き込み（UTF-8エンコーディング）
@@ -859,18 +957,18 @@ def main():
     """
     メイン実行関数
 
-    環境変数からURL・ファイル名を取得し、X投稿パターンを生成して
+    HTML_FILE環境変数で指定されたHTMLファイルを使用してX投稿パターンを生成し、
     Markdownファイルに保存します。GitHub Actionsから呼び出されることを想定。
 
     環境変数:
-        URL: 分析対象のブログ記事URL
-        FILENAME: 出力ファイルパス
+        HTML_FILE: 分析対象のHTMLファイルパス（必須）
+        FILENAME: 出力ファイルパス（オプション、自動生成）
         DEBUG_MODE: デバッグモード（"true"で有効）
-        ANTHROPIC_API_KEY: Claude APIキー（今回はダミー）
+        ANTHROPIC_API_KEY: Claude APIキー（実運用時に必要）
 
     Exit Codes:
         0: 正常終了
-        1: URL関連エラー
+        1: HTMLファイル関連エラー
         2: ファイル関連エラー
         3: システムプロンプト関連エラー
         99: その他のエラー
@@ -887,33 +985,27 @@ def main():
 
     try:
         # 環境変数からパラメータ取得
-        url = os.environ.get("URL")
+        html_file = os.environ.get("HTML_FILE")
         filename = os.environ.get("FILENAME")
         debug_mode = os.environ.get("DEBUG_MODE", "false").lower() == "true"
 
-        # パラメータの基本検証
-        if not url:
-            # デフォルトURLを使用（開発・テスト用）
-            url = "https://tech-lab.sios.jp/archives/48173"
-            print(f"⚠️  URL未指定のため、デフォルトURLを使用: {url}")
+        # HTML_FILE必須チェック
+        if not html_file:
+            print("❌ HTML_FILE環境変数が設定されていません")
+            print("💡 fetch_html_from_techlab.pyで生成されたHTMLファイルが必要です")
+            return 1
 
+        # ファイル名が未指定の場合はデフォルト生成
         if not filename:
-            # デフォルトファイル名を生成
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             filename = f"posts/demo-output-{timestamp}.md"
             print(f"⚠️  ファイル名未指定のため、デフォルト名を使用: {filename}")
 
         print("\n📋 実行パラメータ:")
-        print(f"   - 対象URL: {url}")
+        print(f"   - HTMLファイル: {html_file}")
         print(f"   - 出力ファイル: {filename}")
         print(f"   - デバッグモード: {'有効' if debug_mode else '無効'}")
         print(f"   - 作業ディレクトリ: {os.getcwd()}")
-
-        # URLの形式チェック
-        if not url.startswith(("http://", "https://")):
-            print(f"❌ 無効なURL形式: {url}")
-            print("💡 URLは http:// または https:// で始まる必要があります")
-            return 1
 
         # ファイルパスの検証
         try:
@@ -932,13 +1024,16 @@ def main():
         except FileNotFoundError as e:
             print(f"❌ システムプロンプトファイルエラー: {e}")
             return 3
+        except ValueError as e:
+            print(f"❌ HTMLファイルエラー: {e}")
+            return 1
         except Exception as e:
             print(f"❌ システム初期化エラー: {e}")
             return 99
 
-        # X投稿パターン生成
+        # X投稿パターン生成（HTMLファイルベース）
         print("\n🚀 生成処理開始...")
-        result = generator.generate_posts(url)
+        result = generator.generate_posts_from_html()
 
         # エラーチェック
         if "error" in result:
@@ -947,7 +1042,7 @@ def main():
 
         # ファイル保存
         print("\n💾 ファイル保存処理...")
-        generator.save_to_file(result["content"], filename, url, result)
+        generator.save_to_file(result["content"], filename, html_file, result)
 
         # 実行完了レポート
         total_execution_time = time.time() - execution_start_time
@@ -1013,8 +1108,10 @@ if __name__ == "__main__":
 
 1. 依存ファイル:
    - prompts/system_prompt.md: システムプロンプト定義ファイル
+   - html_cache/*.html: fetch_html_from_techlab.pyで生成されたHTMLファイル
+
 2. 環境変数:
-   - URL: 分析対象のブログ記事URL（必須）
+   - HTML_FILE: 分析対象のHTMLファイルパス（必須）
    - FILENAME: 出力ファイルパス（オプション、デフォルト自動生成）
    - ANTHROPIC_API_KEY: Claude APIキー（実装時に必要）
    - DEBUG_MODE: デバッグモード（"true"で詳細ログ出力）
@@ -1022,15 +1119,20 @@ if __name__ == "__main__":
 3. ディレクトリ構造:
    project/
    ├── scripts/
-   │   └── generate_posts_with_cache.py  # このファイル
+   │   ├── generate_posts_with_cache.py  # このファイル
+   │   └── fetch_html_from_techlab.py    # HTML取得スクリプト
    ├── prompts/
    │   └── system_prompt.md              # システムプロンプト
+   ├── html_cache/                       # HTMLファイル保存先
    └── posts/                            # 出力先（自動作成）
 
 【ローカルでのテスト実行】
 
-# 基本実行
-export URL="https://tech-lab.sios.jp/archives/48173"
+# 1. HTMLファイルを事前取得
+python scripts/fetch_html_from_techlab.py "https://tech-lab.sios.jp/archives/48173"
+
+# 2. 基本実行
+export HTML_FILE="html_cache/tech-lab.sios.jp_archives_48173.html"
 export FILENAME="posts/test-output.md"
 python scripts/generate_posts_with_cache.py
 
@@ -1040,16 +1142,19 @@ python scripts/generate_posts_with_cache.py
 
 【トラブルシューティング】
 
-1. "システムプロンプトファイルが見つかりません"
+1. "HTML_FILE環境変数が設定されていません"
+   → fetch_html_from_techlab.pyでHTMLファイルを生成してください
+
+2. "HTMLファイルが見つかりません"
+   → HTML_FILEパスが正しいか確認してください
+
+3. "システムプロンプトファイルが見つかりません"
    → prompts/system_prompt.md を作成してください
 
-2. "無効なURL形式"
-   → URL は https:// で始まる完全なURLを指定してください
-
-3. "ファイル保存エラー"
+4. "ファイル保存エラー"
    → posts ディレクトリへの書き込み権限を確認してください
 
-4. "予期しないエラー"
+5. "予期しないエラー"
    → DEBUG_MODE="true" で詳細ログを確認してください
 
 【パフォーマンス最適化】
@@ -1062,5 +1167,5 @@ python scripts/generate_posts_with_cache.py
 
 - API キーは環境変数で管理し、コードに直接記載しない
 - 生成されたファイルには機密情報が含まれていないか確認
-- 外部URLアクセス時は適切なタイムアウト設定を行う
+- HTMLファイルの内容は信頼できるソースからのみ取得する
 """

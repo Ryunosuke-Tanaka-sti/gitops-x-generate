@@ -18,73 +18,154 @@ permissions:
   issues: write
 
 jobs:
-  generate-posts:
+  # Job 1: 必要ファイルの事前検証
+  # 生成処理の前に依存ファイルの存在確認を行い、早期にエラーを検出
+  validate-dependencies:
     runs-on: ubuntu-latest
 
     # 実行条件: IssueのタイトルがURL（https://で始まる）の場合のみ実行
-    # 例: "https://tech-lab.sios.jp/archives/48173" → 実行
-    # 例: "バグ報告: ログイン画面が表示されない" → 実行されない
     if: startsWith(github.event.issue.title, 'https://tech-lab.sios.jp/archives/')
+
+    outputs:
+      validation-status: ${{ steps.validate.outputs.status }}
+      target-url: ${{ steps.url-check.outputs.url }}
+      url-valid: ${{ steps.url-check.outputs.valid }}
+
+    steps:
+      # Step 1: リポジトリのソースコードをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: IssueタイトルのURL事前検証
+      - name: Validate issue URL
+        id: url-check
+        run: |
+          echo "🔍 IssueタイトルのURL検証を開始..."
+
+          # IssueタイトルからURLを取得
+          URL="${{ github.event.issue.title }}"
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "🔗 検証対象URL: $URL"
+
+          # URLの形式チェック（基本的な検証）
+          if [[ ! "$URL" =~ ^https?:// ]]; then
+            echo "❌ エラー: 有効なURLではありません"
+            echo "valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # tech-lab.sios.jp ドメインの確認
+          if [[ ! "$URL" =~ ^https://tech-lab\.sios\.jp/archives/[0-9]+/?$ ]]; then
+            echo "❌ エラー: 対象ドメイン外または形式が不正です"
+            echo "📝 期待される形式: https://tech-lab.sios.jp/archives/{数字}"
+            echo "valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "✅ URL形式は正常です"
+          echo "valid=true" >> $GITHUB_OUTPUT
+
+      # Step 3: 必要ファイルの存在確認
+      - name: Validate required files
+        id: validate
+        run: |
+          echo "🔍 必要ファイルの存在確認を開始..."
+          VALIDATION_ERRORS=0
+
+          # 記事取得スクリプトの確認
+          if [ ! -f "scripts/fetch_html_from_techlab.py" ]; then
+            echo "❌ エラー: scripts/fetch_html_from_techlab.py が見つかりません"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ 記事取得スクリプト: scripts/fetch_html_from_techlab.py"
+          fi
+
+          # 生成スクリプトの確認
+          if [ ! -f "scripts/generate_posts_with_cache.py" ]; then
+            echo "❌ エラー: scripts/generate_posts_with_cache.py が見つかりません"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ 生成スクリプト: scripts/generate_posts_with_cache.py"
+          fi
+
+          # システムプロンプトファイルの確認
+          if [ ! -f "prompts/system_prompt.md" ]; then
+            echo "❌ エラー: prompts/system_prompt.md が見つかりません"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ システムプロンプト: prompts/system_prompt.md"
+          fi
+
+          # utilsディレクトリの確認
+          if [ ! -d "scripts/utils" ]; then
+            echo "❌ エラー: scripts/utils ディレクトリが見つかりません"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ ユーティリティディレクトリ: scripts/utils"
+          fi
+
+          # 検証結果の判定
+          if [ $VALIDATION_ERRORS -eq 0 ]; then
+            echo "🎉 すべての必要ファイルが確認できました"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ $VALIDATION_ERRORS 個のファイルが不足しています"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # Job 2: X投稿パターンの生成
+  # 依存ファイル検証が成功した場合のみ実行
+  generate-posts:
+    runs-on: ubuntu-latest
+    needs: validate-dependencies
+
+    # 実行条件: 依存関係検証が成功した場合のみ実行
+    if: needs.validate-dependencies.outputs.validation-status == 'success'
+
+    # このジョブの出力定義（後続ステップで使用）
+    outputs:
+      target-url: ${{ steps.extract-url.outputs.url }}
+      output-filename: ${{ steps.extract-url.outputs.filename }}
+      branch-name: ${{ steps.extract-url.outputs.branch_name }}
+      generation-date: ${{ steps.extract-url.outputs.date }}
+      pr-url: ${{ fromJSON(steps.create-pr.outputs.result).pr_url }}
+      pr-number: ${{ fromJSON(steps.create-pr.outputs.result).pr_number }}
 
     steps:
       # Step 1: リポジトリのソースコードをチェックアウト
       # 生成スクリプトやシステムプロンプトファイルにアクセスするために必要
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # Step 2: Python環境のセットアップ（バージョン3.11を使用）
       # Claude APIとの通信やファイル操作に必要
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
       # Step 3: 必要なPythonパッケージをインストール
+
       - name: Install dependencies
         run: |
           pip install anthropic requests PyYAML
           echo "📦 依存関係インストール完了"
           echo "🔧 インストール済みパッケージ:"
-          pip list | grep -E "(anthropic|requests|PyYAML)"
+          pip list
 
-      # Step 4: GitHub Token権限の確認（デバッグ用）
-      - name: Debug GitHub Token permissions
-        run: |
-          echo "🔍 GitHub Token権限確認..."
-          echo "Repository: ${{ github.repository }}"
-          echo "Actor: ${{ github.actor }}"
-          echo "Event: ${{ github.event_name }}"
-          echo "Issue Number: ${{ github.event.issue.number }}"
-          
-          # 権限テスト（Pull Request API）
-          echo "📡 Pull Request API権限テスト:"
-          HTTP_STATUS=$(curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-               -H "Accept: application/vnd.github.v3+json" \
-               https://api.github.com/repos/${{ github.repository }}/pulls \
-               -s -o /dev/null -w "%{http_code}")
-          echo "HTTP Status: $HTTP_STATUS"
-          
-          if [ "$HTTP_STATUS" = "200" ]; then
-            echo "✅ Pull Request API アクセス: 成功"
-          else
-            echo "❌ Pull Request API アクセス: 失敗 (Status: $HTTP_STATUS)"
-          fi
-
-      # Step 5: IssueタイトルからURLを抽出し、出力ファイル名を生成
-      # GitHub Actionsの出力変数として次のステップで使用
-      - name: Extract URL from issue title
+      # Step 5: ファイル名とブランチ名の生成
+      # ジョブレベルのoutputsで事前定義済み（target-url, output-filename, branch-name, generation-date）
+      # URLは既にvalidate-dependenciesジョブで検証済み
+      - name: Generate file and branch names
         id: extract-url
         run: |
-          # IssueタイトルからURLを取得
-          URL="${{ github.event.issue.title }}"
+          # 検証済みURLを取得（validate-dependenciesジョブから）
+          URL="${{ needs.validate-dependencies.outputs.target-url }}"
           echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "🔗 対象URL: $URL"
-
-          # URLの形式チェック（基本的な検証）
-          if [[ ! "$URL" =~ ^https?:// ]]; then
-            echo "❌ エラー: 有効なURLではありません"
-            exit 1
-          fi
+          echo "🔗 対象URL: $URL（検証済み）"
 
           # 日時変数の生成
           DATE=$(date '+%Y-%m-%d %H:%M:%S')
@@ -110,36 +191,63 @@ jobs:
       - name: Create posts directory
         run: |
           mkdir -p posts
+          mkdir -p html_cache
           echo "📁 postsディレクトリを作成/確認しました"
+          echo "📁 html_cacheディレクトリを作成/確認しました"
           ls -la posts/ || echo "posts/ディレクトリは空です"
+          ls -la html_cache/ || echo "html_cache/ディレクトリは空です"
 
-      # Step 7: システムプロンプトファイルの存在確認
-      # 生成スクリプトが依存するファイルの事前チェック
-      - name: Validate system files
+      # Step 7: HTML記事の取得と抽出・圧縮処理
+      # 対象URLからHTML記事を取得し、必要部分のみを抽出して保存
+      - name: Fetch and extract HTML content
+        id: fetch-html
+        env:
+          URL: ${{ steps.extract-url.outputs.url }}
         run: |
-          echo "🔍 必要ファイルの存在確認..."
-
-          # 生成スクリプトの確認
-          if [ ! -f "scripts/generate_posts_with_cache.py" ]; then
-            echo "❌ エラー: scripts/generate_posts_with_cache.py が見つかりません"
+          echo "📄 HTML記事取得開始..."
+          echo "🔗 対象URL: ${{ steps.extract-url.outputs.url }}"
+          
+          # HTML取得スクリプトを実行
+          python scripts/fetch_html_from_techlab.py > html_fetch_output.log 2>&1
+          FETCH_EXIT_CODE=$?
+          
+          # スクリプトの出力を表示
+          echo "📋 HTML取得ログ:"
+          cat html_fetch_output.log
+          
+          if [ $FETCH_EXIT_CODE -ne 0 ]; then
+            echo "❌ HTML取得スクリプトでエラーが発生しました（終了コード: $FETCH_EXIT_CODE）"
+            echo "🔍 エラーログ詳細:"
+            cat html_fetch_output.log
+            exit $FETCH_EXIT_CODE
+          fi
+          
+          # HTMLファイルパスの生成（URL -> ファイル名変換）
+          # 例: https://tech-lab.sios.jp/archives/48173 -> tech-lab-sios-jp-archives-48173.html
+          DOMAIN_PATH=$(echo "${{ steps.extract-url.outputs.url }}" | sed 's|https\?://||' | sed 's|/|-|g' | sed 's|\.|-|g')
+          HTML_FILE="html_cache/${DOMAIN_PATH}.html"
+          echo "html_file=$HTML_FILE" >> $GITHUB_OUTPUT
+          echo "📁 HTML保存パス: $HTML_FILE"
+          
+          # HTMLファイルが実際に作成されたかチェック
+          if [ -f "$HTML_FILE" ]; then
+            HTML_SIZE=$(stat -c%s "$HTML_FILE" 2>/dev/null || stat -f%z "$HTML_FILE" 2>/dev/null)
+            echo "✅ HTMLファイル保存成功: $HTML_FILE (${HTML_SIZE} bytes)"
+            
+            # HTMLファイルの先頭を確認（デバッグ用）
+            echo "📋 HTMLファイル先頭プレビュー:"
+            head -5 "$HTML_FILE" | sed 's/^/   /'
+          else
+            echo "❌ HTMLファイルが見つかりません: $HTML_FILE"
+            echo "🔍 html_cacheディレクトリの内容:"
+            ls -la html_cache/ || echo "html_cacheディレクトリが空です"
             exit 1
           fi
-          echo "✅ 生成スクリプト: scripts/generate_posts_with_cache.py"
-
-          # システムプロンプトファイルの確認
-          if [ ! -f "prompts/system_prompt.md" ]; then
-            echo "❌ エラー: prompts/system_prompt.md が見つかりません"
-            exit 1
-          fi
-          echo "✅ システムプロンプト: prompts/system_prompt.md"
-
-          # ファイルサイズの確認（プロンプトキャッシュサイズ想定）
-          PROMPT_SIZE=$(wc -c < prompts/system_prompt.md)
-          echo "📊 システムプロンプトサイズ: ${PROMPT_SIZE} bytes"
-
-          if [ $PROMPT_SIZE -lt 10000 ]; then
-            echo "⚠️  警告: システムプロンプトが小さすぎます（プロンプトキャッシュ効果が限定的）"
-          fi
+          
+          # クリーンアップ
+          rm -f html_fetch_output.log
+          
+          echo "✅ HTML取得・抽出処理完了"
 
       # Step 8: Claude APIを使用してX投稿パターンを生成
       # プロンプトキャッシュを活用してコスト効率化
@@ -148,14 +256,15 @@ jobs:
         env:
           # GitHub Secretsから取得（リポジトリ設定で事前に設定が必要）
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          URL: ${{ steps.extract-url.outputs.url }}
           FILENAME: ${{ steps.extract-url.outputs.filename }}
+          HTML_FILE: ${{ steps.fetch-html.outputs.html_file }}
           # デバッグモード（詳細ログ出力）
           DEBUG_MODE: "true"
         run: |
           echo "🚀 プロンプトキャッシュ対応版で生成開始..."
           echo "💡 コスト削減効果: 約37%（プロンプトキャッシュ使用）"
           echo "⏰ 開始時刻: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "📄 入力HTMLファイル: ${{ steps.fetch-html.outputs.html_file }}"
 
           # Python生成スクリプトを実行
           # エラーが発生した場合はワークフローを停止
@@ -167,174 +276,101 @@ jobs:
             exit $GENERATION_EXIT_CODE
           fi
 
-          echo "⏰ 完了時刻: $(date '+%Y-%m-%d %H:%M:%S')"
-
-          # 生成されたファイルの詳細確認
-          echo "📁 生成ファイル詳細確認:"
+          echo "✅ X投稿パターン生成完了"
+          
+          # 生成されたファイルの確認
           if [ -f "${{ steps.extract-url.outputs.filename }}" ]; then
-            ls -la "${{ steps.extract-url.outputs.filename }}"
-            
-            # ファイルサイズの測定
-            SIZE=$(wc -c < "${{ steps.extract-url.outputs.filename }}")
-            LINES=$(wc -l < "${{ steps.extract-url.outputs.filename }}")
-            echo "📊 ファイルサイズ: ${SIZE} bytes"
-            echo "📊 行数: ${LINES} 行"
-            
-            # ファイル内容の品質チェック
-            echo "🔍 品質チェック:"
-            
-            # URLが含まれているかチェック
-            if grep -q "https://" "${{ steps.extract-url.outputs.filename }}"; then
-              echo "✅ URL配置: 確認済み"
-            else
-              echo "⚠️  警告: URLが見つかりません"
-            fi
-            
-            # 3パターンが含まれているかチェック
-            PATTERN_COUNT=$(grep -c "パターン" "${{ steps.extract-url.outputs.filename }}")
-            echo "✅ 投稿パターン数: ${PATTERN_COUNT}"
-            
-            # ハッシュタグが含まれているかチェック
-            if grep -q "#" "${{ steps.extract-url.outputs.filename }}"; then
-              echo "✅ ハッシュタグ: 含まれています"
-            else
-              echo "⚠️  警告: ハッシュタグが見つかりません"
-            fi
-            
-            # ファイルの先頭部分を表示（デバッグ用）
-            echo "📝 ファイル内容プレビュー（先頭20行）:"
-            head -n 20 "${{ steps.extract-url.outputs.filename }}"
-            
+            FILE_SIZE=$(stat -c%s "${{ steps.extract-url.outputs.filename }}" 2>/dev/null || stat -f%z "${{ steps.extract-url.outputs.filename }}" 2>/dev/null)
+            echo "📁 生成ファイル確認: ${{ steps.extract-url.outputs.filename }} (${FILE_SIZE} bytes)"
           else
-            echo "❌ エラー: 生成ファイルが見つかりません"
+            echo "❌ 生成ファイルが見つかりません: ${{ steps.extract-url.outputs.filename }}"
             exit 1
           fi
-
-      # Step 9: PR本文ファイルの準備
-      # GitHub CLI用にPR本文を一時ファイルとして保存
-      - name: Prepare PR body file
-        run: |
-          cat > pr-body.md << 'EOF'
-          ## 📝 自動生成されたX投稿パターン（プロンプトキャッシュ対応版）
-
-          ### 🔗 基本情報
-          | 項目 | 内容 |
-          |------|------|
-          | **対象URL** | ${{ steps.extract-url.outputs.url }} |
-          | **生成ファイル** | `${{ steps.extract-url.outputs.filename }}` |
-          | **Issue** | #${{ github.event.issue.number }} |
-          | **生成時刻** | ${{ steps.extract-url.outputs.date }} |
-          | **最適化** | プロンプトキャッシュ使用（37%コスト削減） |
-
-          ### 🔍 生成内容
-          - ✅ **ブログ記事の技術的分析**（5段階評価システム）
-          - ✅ **3パターンのX投稿文**（効果重視・課題共感・学習促進）
-          - ✅ **投稿推奨時間の提案**（エンジニア向け最適化）
-          - ✅ **コスト・トークン使用量の詳細記録**
-
-          ### 💰 コスト効率化の詳細
-          - 🎯 **プロンプトキャッシュ活用**（20,000トークン）
-          - 📉 **1回あたり約37%のコスト削減**（$0.147 → $0.093）
-          - 📊 **月間利用でさらなる効率化**
-          - 💾 **詳細なコスト記録**（ファイル内メタデータ）
-
-          ### 🚨 リンクカード表示保証
-          以下の最適化により、X投稿時のリンクカード表示を保証：
-          - ✅ **URLを投稿文の冒頭に単独行で配置**
-          - ✅ **URL前後のスペース・改行による明確分離**
-          - ✅ **他のテキストや絵文字と混在させない設計**
-          - ✅ **240文字超投稿でも冒頭URL配置を維持**
-
-          ### ✅ レビュー確認事項
-
-          #### 必須確認項目
-          - [ ] **投稿文の内容確認**（技術的正確性・表現の適切性）
-          - [ ] **ハッシュタグの適切性確認**（エンジニア向け・トレンド性）
-          - [ ] **リンクカード表示対応確認**（URL配置・分離）
-          - [ ] **投稿推奨時間の妥当性確認**（ターゲット時間帯）
-
-          #### 任意確認項目
-          - [ ] **コスト情報の確認**（メタデータ内の詳細情報）
-          - [ ] **ブランド・トーン確認**（企業・個人のトーンと整合性）
-          - [ ] **競合他社配慮**（類似投稿との差別化）
-
-          ### 📊 技術的詳細
-
-          #### 生成データの構造
-          ファイル内のYAML frontmatterに以下の情報が記録されています：
-          - **トークン使用量**（キャッシュ済み・新規・出力）
-          - **コスト情報**（USD・JPY両方）
-          - **生成日時・URL・プロンプトキャッシュ使用状況**
-          - **品質保証フラグ**（リンクカード最適化等）
-
-          #### システム情報
-          - **Generator Version**: v1.0.0
-          - **API Model**: Claude Sonnet 4
-          - **Cache Strategy**: Prompt Cache (20k tokens)
-          - **Output Format**: Markdown with YAML frontmatter
-
-          ### 🚀 次のステップ
-
-          1. **PRレビュー**（内容の確認と承認）
-          2. **必要に応じた手動調整**（投稿文の微調整）
-          3. **PRマージ**（postsディレクトリへの追加）
-          4. **投稿実行**（生成された投稿文の利用）
-
-          ### 🔗 関連リンク
-          - **元Issue**: #${{ github.event.issue.number }}
-          - **対象記事**: ${{ steps.extract-url.outputs.url }}
-          - **コスト最適化**: [プロンプトキャッシュについて](https://docs.anthropic.com/claude/docs/prompt-caching)
-
-          ---
-
-          > 🤖 **このPRは Issue #${{ github.event.issue.number }} から自動生成されました**  
-          > 💡 **プロンプトキャッシュ対応により、従来比37%のコスト削減を実現**  
-          > ⏰ **生成時刻**: ${{ steps.extract-url.outputs.date }}
-          EOF
-
-          echo "📝 PR本文ファイルを準備しました"
-          ls -la pr-body.md
-
-      # Step 10: 変更をGitにコミット
+      # Step 9: 変更をGitにコミット
       # GitHub CLIでPRを作成する前に変更をコミットする必要がある
       - name: Commit changes
         run: |
           # Git設定（GitHub Actions botとして設定）
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
+
           # 生成されたファイルをステージング
           git add "${{ steps.extract-url.outputs.filename }}"
-          
+          # HTMLキャッシュファイルもコミットに含める（デバッグ・履歴管理用）
+          git add "${{ steps.fetch-html.outputs.html_file }}"
+
           # 変更があるかチェック
           if git diff --staged --quiet; then
             echo "⚠️  コミットする変更がありません"
             exit 1
           fi
-          
+
           # コミット実行
           git commit -m "feat: Add X posts for ${{ steps.extract-url.outputs.url }}
-
-          - Generated with prompt cache optimization (37% cost reduction)
           - Issue: #${{ github.event.issue.number }}
-          - Generated at: ${{ steps.extract-url.outputs.date }}"
-          
+          - Generated at: ${{ steps.extract-url.outputs.date }}
+          - HTML cache: ${{ steps.fetch-html.outputs.html_file }}
+          - Output file: ${{ steps.extract-url.outputs.filename }}"
+
           echo "✅ 変更をコミットしました"
 
-      # Step 11: 新しいブランチを作成してプッシュ
+      # Step 9: 新しいブランチを作成してプッシュ
       # Pull Request作成のためのブランチ準備
       - name: Create and push feature branch
         run: |
           # 新しいブランチを作成・切り替え
           git checkout -b "${{ steps.extract-url.outputs.branch_name }}"
-          
+
           # リモートにブランチをプッシュ
           git push origin "${{ steps.extract-url.outputs.branch_name }}"
-          
+
           echo "🌿 ブランチ '${{ steps.extract-url.outputs.branch_name }}' を作成・プッシュしました"
 
+      # Step 9.5: 生成ファイルから内容を抽出（シンプル版）
+      # YAML frontmatterを除去して、Markdownコンテンツをそのまま使用
+      - name: Extract generated content for PR/Issue comments
+        id: extract-content
+        run: |
+          echo "📄 生成ファイルから内容を抽出中..."
+          
+          GENERATED_FILE="${{ steps.extract-url.outputs.filename }}"
+          
+          if [ -f "$GENERATED_FILE" ]; then
+            echo "✅ 生成ファイル確認: $GENERATED_FILE"
+            
+            # ファイルサイズ確認
+            FILE_SIZE=$(stat -c%s "$GENERATED_FILE" 2>/dev/null || stat -f%z "$GENERATED_FILE" 2>/dev/null)
+            echo "📊 ファイルサイズ: ${FILE_SIZE} bytes"
+            
+            # YAML frontmatterを除去してMarkdownコンテンツを抽出
+            # 最初の --- から次の --- までをスキップして、その後のコンテンツを取得
+            CONTENT=$(awk '
+              BEGIN { in_frontmatter = 0; content_started = 0 }
+              /^---$/ { 
+                if (!content_started) {
+                  in_frontmatter = !in_frontmatter
+                  if (!in_frontmatter) content_started = 1
+                  next
+                }
+              }
+              content_started && !in_frontmatter { print }
+            ' "$GENERATED_FILE")
+            
+            # 抽出したコンテンツをファイルに保存（GitHub Actionsの変数制限回避）
+            echo "$CONTENT" > generated_content.txt
+            
+            echo "✅ コンテンツ抽出完了"
+            echo "📊 抽出統計:"
+            echo "   - 元ファイルサイズ: ${FILE_SIZE} bytes"
+            echo "   - 抽出後サイズ: $(wc -c < generated_content.txt) bytes"
+            echo "   - 抽出後行数: $(wc -l < generated_content.txt) 行"
+            
+          else
+            echo "❌ 生成ファイルが見つかりません: $GENERATED_FILE"
+            exit 1
+          fi
 
-      # Step 12: GitHub Scriptを使用してPull Requestを作成
+      # Step 10: GitHub Scriptを使用してPull Requestを作成
       # 公式のactions/github-scriptを使用した信頼性の高いPR作成
       - name: Create Pull Request with GitHub Script
         uses: actions/github-script@v7
@@ -342,83 +378,55 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
+            const fs = require('fs');
             
-            // PR本文の定義
-            const prBody = `## 📝 自動生成されたX投稿パターン（プロンプトキャッシュ対応版）
+            // 生成されたコンテンツを読み込み（YAML frontmatter除去済み）
+            let generatedContent = '';
+            
+            try {
+              generatedContent = fs.readFileSync('generated_content.txt', 'utf8');
+            } catch (error) {
+              console.log('⚠️  生成コンテンツファイルの読み込みに失敗、デフォルト内容を使用します');
+              generatedContent = '生成コンテンツの読み込みに失敗しました。生成ファイルを直接確認してください。';
+            }
 
-            ### 🔗 基本情報
-            | 項目 | 内容 |
-            |------|------|
-            | **対象URL** | ${{ steps.extract-url.outputs.url }} |
-            | **生成ファイル** | \`${{ steps.extract-url.outputs.filename }}\` |
-            | **Issue** | #${{ github.event.issue.number }} |
-            | **生成時刻** | ${{ steps.extract-url.outputs.date }} |
-            | **最適化** | プロンプトキャッシュ使用（37%コスト削減） |
+            // PR本文の定義（生成された内容をそのまま使用）
+            const prBody = `
+            ${generatedContent}
 
-            ### 🔍 生成内容
-            - ✅ **ブログ記事の技術的分析**（5段階評価システム）
-            - ✅ **3パターンのX投稿文**（効果重視・課題共感・学習促進）
-            - ✅ **投稿推奨時間の提案**（エンジニア向け最適化）
-            - ✅ **コスト・トークン使用量の詳細記録**
+            # ✅ レビュー確認事項
 
-            ### 💰 コスト効率化の詳細
-            - 🎯 **プロンプトキャッシュ活用**（20,000トークン）
-            - 📉 **1回あたり約37%のコスト削減**（$0.147 → $0.093）
-            - 📊 **月間利用でさらなる効率化**
-            - 💾 **詳細なコスト記録**（ファイル内メタデータ）
-
-            ### 🚨 リンクカード表示保証
-            以下の最適化により、X投稿時のリンクカード表示を保証：
-            - ✅ **URLを投稿文の冒頭に単独行で配置**
-            - ✅ **URL前後のスペース・改行による明確分離**
-            - ✅ **他のテキストや絵文字と混在させない設計**
-            - ✅ **240文字超投稿でも冒頭URL配置を維持**
-
-            ### ✅ レビュー確認事項
-
-            #### 必須確認項目
+            ## 必須確認項目
             - [ ] **投稿文の内容確認**（技術的正確性・表現の適切性）
             - [ ] **ハッシュタグの適切性確認**（エンジニア向け・トレンド性）
             - [ ] **リンクカード表示対応確認**（URL配置・分離）
             - [ ] **投稿推奨時間の妥当性確認**（ターゲット時間帯）
+            - [ ] **文字数確認**（各パターンが280文字以内）
 
-            #### 任意確認項目
+            ## 任意確認項目
             - [ ] **コスト情報の確認**（メタデータ内の詳細情報）
             - [ ] **ブランド・トーン確認**（企業・個人のトーンと整合性）
             - [ ] **競合他社配慮**（類似投稿との差別化）
 
-            ### 📊 技術的詳細
-
-            #### 生成データの構造
-            ファイル内のYAML frontmatterに以下の情報が記録されています：
-            - **トークン使用量**（キャッシュ済み・新規・出力）
-            - **コスト情報**（USD・JPY両方）
-            - **生成日時・URL・プロンプトキャッシュ使用状況**
-            - **品質保証フラグ**（リンクカード最適化等）
-
-            #### システム情報
-            - **Generator Version**: v1.0.0
-            - **API Model**: Claude Sonnet 4
-            - **Cache Strategy**: Prompt Cache (20k tokens)
-            - **Output Format**: Markdown with YAML frontmatter
-
-            ### 🚀 次のステップ
+            # 🚀 次のステップ
 
             1. **PRレビュー**（内容の確認と承認）
             2. **必要に応じた手動調整**（投稿文の微調整）
             3. **PRマージ**（postsディレクトリへの追加）
             4. **投稿実行**（生成された投稿文の利用）
+            5. **フィードバック提供**（改善点の共有）
 
-            ### 🔗 関連リンク
+            ## 🔗 関連リンク
             - **元Issue**: #${{ github.event.issue.number }}
             - **対象記事**: ${{ steps.extract-url.outputs.url }}
-            - **コスト最適化**: [プロンプトキャッシュについて](https://docs.anthropic.com/claude/docs/prompt-caching)
+            - **生成ファイル**: \`${{ steps.extract-url.outputs.filename }}\`
 
             ---
 
             > 🤖 **このPRは Issue #${{ github.event.issue.number }} から自動生成されました**  
-            > 💡 **プロンプトキャッシュ対応により、従来比37%のコスト削減を実現**  
-            > ⏰ **生成時刻**: ${{ steps.extract-url.outputs.date }}`;
+            > ⏰ **生成時刻**: ${{ steps.extract-url.outputs.date }}  
+            > � **プロンプトキャッシュで37%コスト削減**
+            `;
 
             try {
               console.log('🚀 Pull Request作成開始...');
@@ -487,14 +495,25 @@ jobs:
               throw error;
             }
 
-      # Step 13: Issue作成者への完了通知コメント
+      # Step 11: Issue作成者への完了通知コメント
       # 生成状況とコスト情報を含む詳細な報告
       - name: Comment on issue with detailed report
         uses: actions/github-script@v7
         with:
           script: |
-            // Issue作成者への詳細な完了報告
-            // GitHub API経由でコメントを投稿
+            const fs = require('fs');
+            
+            // 生成されたコンテンツを読み込み（YAML frontmatter除去済み）
+            let generatedContent = '';
+            
+            try {
+              generatedContent = fs.readFileSync('generated_content.txt', 'utf8');
+            } catch (error) {
+              console.log('⚠️  生成コンテンツファイルの読み込みに失敗、デフォルト内容を使用します');
+              generatedContent = '生成コンテンツの読み込みに失敗しました。生成ファイルを直接確認してください。';
+            }
+            
+            // Issue作成者への詳細な完了報告（実際の生成内容を使用）
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -508,29 +527,29 @@ jobs:
               | 📁 **生成ファイル** | \`${{ steps.extract-url.outputs.filename }}\` |
               | 🔗 **対象URL** | ${{ steps.extract-url.outputs.url }} |
               | ⏰ **生成時刻** | ${{ steps.extract-url.outputs.date }} |
+              | � **総合評価** | ${{ steps.extract-content.outputs.overall_rating }} |
+              | ⭐ **技術的正確性** | ${{ steps.extract-content.outputs.tech_accuracy }} |
+              | 🎯 **実装レベル** | ${{ steps.extract-content.outputs.implementation_level }} |
+              | 👥 **対象読者** | ${{ steps.extract-content.outputs.target_audience }} |
+              | 📝 **生成パターン数** | ${{ steps.extract-content.outputs.pattern_count }}パターン |
+              | 🔤 **文字数** | A: ${{ steps.extract-content.outputs.a_pattern_chars }}文字、B: ${{ steps.extract-content.outputs.b_pattern_chars }}文字、C: ${{ steps.extract-content.outputs.c_pattern_chars }}文字 |
               | 💰 **コスト効率** | プロンプトキャッシュで37%削減 |
               | 🌿 **PR状況** | 作成完了（レビュー待ち） |
-              
-              ## 🎯 生成された内容
-              
-              ### ✅ 含まれる要素
-              - **ブログ記事の技術的分析**（A-C評価、5点満点）
-              - **3パターンのX投稿文**（各280バイト以内）
-              - **投稿推奨時間**（エンジニア向け最適化）
-              - **ハッシュタグ分析結果**（技術特化、6個以内）
-              
-              ### 🚨 リンクカード表示保証
-              - URLを投稿文の冒頭に単独行で配置
-              - URL前後の明確な分離
-              - 絵文字・テキストとの混在回避
+
+              ## � ブログ記事の評価結果
+              ${evaluationSection || '評価情報の取得に失敗しました。生成ファイルを直接確認してください。'}
+
+              ## 🐦 生成されたX投稿パターン
+              ${postsSection || '投稿パターンの取得に失敗しました。生成ファイルを直接確認してください。'}
               
               ## 💡 次のアクション
               
               ### 1. **PRレビュー**
               生成されたPull Requestをレビューしてください：
-              - 投稿文の内容確認
-              - ハッシュタグの適切性確認
-              - 推奨時間の妥当性確認
+              - 投稿文の内容確認（技術的正確性・表現の適切性）
+              - ハッシュタグの適切性確認（エンジニア向け・トレンド性）
+              - 推奨時間の妥当性確認（ターゲット時間帯）
+              - 文字数確認（各パターンが260文字以内）
               
               ### 2. **カスタマイズ（任意）**
               必要に応じて以下を調整：
@@ -540,9 +559,9 @@ jobs:
               
               ### 3. **投稿実行**
               PRマージ後、生成された投稿パターンを活用：
-              - Aパターン：効果重視（数値訴求）
-              - Bパターン：課題共感（問題解決）
-              - Cパターン：学習促進（トレンド）
+              - **Aパターン**：効果重視（数値訴求）- ${{ steps.extract-content.outputs.a_pattern_chars }}文字
+              - **Bパターン**：課題共感（問題解決）- ${{ steps.extract-content.outputs.b_pattern_chars }}文字
+              - **Cパターン**：学習促進（トレンド）- ${{ steps.extract-content.outputs.c_pattern_chars }}文字
               
               ## 📊 技術的詳細
               
@@ -550,6 +569,7 @@ jobs:
               - **API Model**: Claude Sonnet 4
               - **生成方式**: ダミー実装（API検証前）
               - **品質保証**: リンクカード最適化済み
+              - **誇張表現検証**: 記事内容との整合性確認済み
               
               ## 🔗 便利なリンク
               
@@ -561,12 +581,13 @@ jobs:
               
               > 💡 **プロンプトキャッシュにより高速・低コストで生成完了**  
               > 🚀 **37%のコスト削減を実現しながら高品質な投稿パターンを提供**  
-              > 📈 **継続利用でさらなる効率化が期待できます**
+              > 📈 **継続利用でさらなる効率化が期待できます**  
+              > 🎯 **総合評価${{ steps.extract-content.outputs.overall_rating }}・${{ steps.extract-content.outputs.tech_accuracy }}技術的正確性の高品質コンテンツ**
               
               何かご質問があれば、このIssueでお気軽にお尋ねください！`
             });
 
-      # Step 14: エラー時の通知処理
+      # Step 12: エラー時の通知処理
       # 生成失敗時にIssueに詳細なエラー情報をコメント
       - name: Report generation failure
         if: failure()
@@ -610,36 +631,65 @@ jobs:
               > 🔄 **修正後、新しいIssueを作成して再実行してください**`
             });
 
-# ワークフロー実行時の注意事項とセットアップ手順:
-#
-# 【必須設定】
-# 1. GitHub Repository Settings:
-#    - Settings > Actions > General > Workflow permissions
-#    - "Read and write permissions" を選択
-#    - "Allow GitHub Actions to create and approve pull requests" にチェック
-#
-# 2. GitHub Secrets設定:
-#    - ANTHROPIC_API_KEY: Claude APIキーを設定
-#    - Settings > Secrets and variables > Actions から設定
-#
-# 3. ディレクトリ構成:
-#    - scripts/generate_posts_with_cache.py: 生成スクリプト
-#    - prompts/system_prompt.md: システムプロンプト
-#    - posts/: 生成ファイル保存先（自動作成）
-#
-# 【使用方法】
-# 1. Issue作成: タイトルにURLを入力
-#    例: "https://tech-lab.sios.jp/archives/48173"
-# 2. 自動実行: ワークフローが自動的に開始
-# 3. PR確認: 生成されたPRをレビュー
-# 4. マージ: 承認後にマージして完了
-#
-# 【権限エラーの対処法】
-# 1. リポジトリ設定確認: Settings > Actions > General
-# 2. 組織設定確認: Organization settings (該当する場合)
-# 3. GitHub Scriptの利点: 公式Action + 柔軟なエラーハンドリング
-#
-# 【コスト効率化】
-# - プロンプトキャッシュにより2回目以降の実行で37%コスト削減
-# - 月間50回実行時: 約$5.40（従来$8.60から削減）
-# - 年間での削減効果: 約$38.40の節約
+      # Step 4: 検証失敗時の通知処理
+      - name: Report validation failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ **依存ファイルの検証に失敗しました**
+              
+              ## 🔍 検証エラー詳細
+              
+              X投稿パターン生成に必要なファイルまたはURL形式に問題があります。
+              
+              ### 🔗 URL形式チェック
+              - **対象URL**: \`${{ github.event.issue.title }}\`
+              - **期待される形式**: \`https://tech-lab.sios.jp/archives/{数字}\`
+              - **例**: \`https://tech-lab.sios.jp/archives/48173\`
+              
+              ### 📁 必要ファイル一覧
+              - \`scripts/fetch_html_from_techlab.py\` - 記事取得スクリプト
+              - \`scripts/generate_posts_with_cache.py\` - 生成スクリプト
+              - \`prompts/system_prompt.md\` - システムプロンプト
+              - \`scripts/utils/\` - ユーティリティディレクトリ
+              
+              ### 🔧 解決方法
+              
+              #### URLの問題の場合
+              1. **URL形式確認**: IssueタイトルがURL形式になっているか確認
+              2. **ドメイン確認**: tech-lab.sios.jp の記事URLか確認
+              3. **新しいIssue作成**: 正しいURLで新しいIssueを作成
+              
+              #### ファイル不足の場合
+              1. **ファイル確認**: 上記ファイルがリポジトリに存在するか確認
+              2. **ブランチ確認**: mainブランチに必要ファイルが含まれているか確認
+              3. **パス確認**: ファイルパスが正しいか確認
+              
+              ### 📁 期待されるディレクトリ構造
+              \`\`\`
+              .
+              ├── scripts/
+              │   ├── fetch_html_from_techlab.py
+              │   ├── generate_posts_with_cache.py
+              │   └── utils/
+              │       └── *.py
+              ├── prompts/
+              │   └── system_prompt.md
+              └── posts/ (自動作成)
+              \`\`\`
+              
+              ### 🚀 次のステップ
+              
+              1. **問題の特定**: URLまたはファイル構成のどちらに問題があるか確認
+              2. **修正**: 該当する問題を修正
+              3. **新しいIssue作成**: 修正後、新しいIssueを作成して再実行
+              
+              ---
+              
+              > 🔄 **修正後、新しいIssueを作成して再実行してください**`
+            });
