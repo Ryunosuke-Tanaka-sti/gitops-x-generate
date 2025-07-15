@@ -96,14 +96,6 @@ jobs:
             echo "✅ システムプロンプト: prompts/system_prompt.md"
           fi
 
-          # utilsディレクトリの確認
-          if [ ! -d "scripts/utils" ]; then
-            echo "❌ エラー: scripts/utils ディレクトリが見つかりません"
-            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
-          else
-            echo "✅ ユーティリティディレクトリ: scripts/utils"
-          fi
-
           # 検証結果の判定
           if [ $VALIDATION_ERRORS -eq 0 ]; then
             echo "🎉 すべての必要ファイルが確認できました"
