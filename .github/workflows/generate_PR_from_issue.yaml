@@ -143,7 +143,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install anthropic requests PyYAML
+          pip install -r requirements.txt
           echo "📦 依存関係インストール完了"
           echo "🔧 インストール済みパッケージ:"
           pip list
@@ -648,7 +648,6 @@ jobs:
               - \`scripts/fetch_html_from_techlab.py\` - 記事取得スクリプト
               - \`scripts/generate_posts_with_cache.py\` - 生成スクリプト
               - \`prompts/system_prompt.md\` - システムプロンプト
-              - \`scripts/utils/\` - ユーティリティディレクトリ
               
               ### 🔧 解決方法
               
