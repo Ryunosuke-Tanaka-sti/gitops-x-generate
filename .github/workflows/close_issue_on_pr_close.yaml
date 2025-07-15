@@ -20,8 +20,29 @@ jobs:
           echo "PR Body: $pr_body"
           
           # "Closes #123" や "Fixes #123" などの形式でIssue番号を抽出
-          # 複数のキーワードに対応
-          issue_number=$(echo "$pr_body" | grep -oiE "(close[sd]?|fix(e[sd])?|resolve[sd]?) #([0-9]+)" | grep -oE "#[0-9]+" | head -1 | sed 's/#//')
+          # 複数のキーワードに対応（より安全な方法）
+          issue_number=""
+          
+          # 各パターンを個別にチェック
+          if echo "$pr_body" | grep -qi "closes #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "closes #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "close #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "close #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "closed #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "closed #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "fixes #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "fixes #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "fix #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "fix #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "fixed #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "fixed #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "resolves #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "resolves #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "resolve #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "resolve #[0-9]\+" | head -1 | sed 's/.*#//')
+          elif echo "$pr_body" | grep -qi "resolved #[0-9]"; then
+            issue_number=$(echo "$pr_body" | grep -oi "resolved #[0-9]\+" | head -1 | sed 's/.*#//')
+          fi
           
           if [ -z "$issue_number" ]; then
             echo "No issue reference found in PR body"
