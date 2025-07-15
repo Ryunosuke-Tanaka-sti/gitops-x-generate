@@ -1,0 +1,178 @@
+<h1>DevContainerでStreamlit開発を始める方法：Docker＋VSCode | SIOS Tech. Lab</h1>
+
+<section class="entry-content"><div><div><div><b>目次</b></div><div><ul><li><a href="#ai_za"><span>1</span><span>挨拶</span></a></li><li><a href="#Stremlit_kai_fa_huan_jingwoDevContainerde_zuo_chengsuru"><span>2</span><span>Stremlit開発環境をDevContainerで作成する</span></a><ul><li><a href="#direkutori_gou_cheng"><span>2.1</span><span>ディレクトリ構成</span></a></li><li><a href="#Dockerfile"><span>2.2</span><span>Dockerfile</span></a></li><li><a href="#composeyml"><span>2.3</span><span>compose.yml</span></a></li><li><a href="#devcontainerjson"><span>2.4</span><span>devcontainer.json</span></a></li><li><a href="#fomattorinta_she_ding"><span>2.5</span><span>フォーマット＆リンター設定</span></a></li></ul></li><li><a href="#Stremlitnodemo"><span>3</span><span>Stremlitのデモ</span></a></li><li><a href="#matome"><span>4</span><span>まとめ</span></a></li></ul></div></div></div><h2><span>挨拶</span></h2><p>ども！最近はAI関連からInfrastructure as Code（IaC）などにも入門して幅広いブログを執筆している龍ちゃんです。最近はブログ執筆にAIを導入して、執筆スピードと質が上がっているような気がして楽しいですね。7月にまとめた内容は8月の初頭に45分セミナーにまとめるので、激しめに検証を進めています。</p><p>さて今回は「Stremlit」のお話になります。最近ふんわりとStremlitを書く機会が増えたので、DevContainerで開発する環境構築をまとめていこうと思います。</p><h2><span>Stremlit開発環境をDevContainerで作成する</span></h2><p>今回は、開発環境を使いまわす可能性を考慮してGitに環境を上げています。もし使いたい方がいれば、<a href="https://github.com/Ryunosuke-Tanaka-sti/streamlit-devcontainer">リポジトリをクローン</a>して利用してください。</p><h3><span>ディレクトリ構成</span></h3><p>今回作成する環境のディレクトリ構成になります。venvなどでも構築できるように<code>.devcontainer</code>内でコンテナの定義をすべて収めています。リポジトリのトップからマウントすることで、コンテナ内でGit操作をすることができます。</p><div><pre><code>.
+├── .devcontainer
+│   ├── Dockerfile
+│   ├── compose.yml
+│   └── devcontainer.json
+├── .env
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── sample.env
+├── setup.cfg
+└── src
+    └── main.py</code></pre></div><h3><span>Dockerfile</span></h3><p>ベースイメージは、<a href="https://hub.docker.com/r/microsoft/devcontainers-python">Microsoftが出しているPython 3.11のベースイメージ</a>を利用しています。利点として、以下の二点があります。</p><ul><li>Gitが標準で搭載されている</li><li>vscodeユーザーがデフォルトで作成されている（非rootユーザー）</li><li>コード解析・フォーマッター「flake8」「black」が標準搭載</li></ul><p>Dockerfile内で行っている処理は、pipのアップグレードのみになります。</p><div><pre><code># Use the official Microsoft Python image (Debian Bullseye based)
+FROM mcr.microsoft.com/devcontainers/python:1-3.11-bullseye
+
+# Set the working directory
+WORKDIR /home/vscode/python
+
+# Install Python packages that are commonly used
+RUN pip install --upgrade pip
+
+# Keep the container running
+CMD ["sleep", "infinity"]</code></pre></div><h3><span>compose.yml</span></h3><p>将来的な拡張（データベース等）を考えて、composeファイルで定義しています。リポジトリのルートディレクトリからマウントすることで、仮想環境内からGitコマンドを直接実行することができます。</p><p>Streamlitでデフォルトで公開されるポート（8501）を接続しています。</p><div><pre><code>services:
+  python:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    tty: true
+    volumes:
+      - type: bind
+        source: ../
+        target: /home/vscode/python
+    restart: always
+    ports:
+      - "8501:8501"</code></pre></div><h3><span>devcontainer.json</span></h3><p>今回作成するファイルの中で最も記述量が多いファイルになります。基本的にコピー＆ペーストで大丈夫です。設定している主要項目としては以下になります。</p><ul><li>拡張機能の追加</li><li>開発環境設定</li><li>開発用feature（Azure CLI・GitHub CLI）</li></ul><p>開発環境設定では、pylintを無効化してflake8を有効化するように設定しています。ファイルをセーブしたタイミングでリンターとフォーマッターが実行されるように設定しています。</p><div><pre><code>{
+    "name": "Streamlit",
+    "service": "python",
+    "dockerComposeFile": "./compose.yml",
+    "workspaceFolder": "/home/vscode/python",
+    "shutdownAction": "stopCompose",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.black-formatter",
+                "ms-vscode.vscode-json",
+                "ms-python.flake8"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.formatting.provider": "black",
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "python.linting.enabled": true,
+                "python.linting.pylintEnabled": true,
+                "python.linting.lintOnSave": true,
+                "python.linting.flake8Enabled": true,
+                "": {
+                    "editor.formatOnSave": true,
+                    "editor.defaultFormatter": "ms-python.black-formatter"
+                }
+            }
+        }
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/azure-cli:1": {},
+        "ghcr.io/devcontainers/features/github-cli": {}
+    },
+    "forwardPorts": [
+        8501
+    ],
+    "portsAttributes": {
+        "8501": {
+            "label": "Streamlit",
+            "onAutoForward": "notify"
+        }
+    },
+    "postCreateCommand": "pip install -r requirements.txt",
+    "remoteUser": "vscode",
+    "updateRemoteUserUID": true
+}</code></pre></div><p>featureとしてAzure CLIとGitHub CLIをインストールしています。これは将来的にデプロイ先をAzure Web Apps on Containerでデプロイすることを考慮して設定しています。</p><h3><span>フォーマット＆リンター設定</span></h3><p>前段の設定のみで開発を進めることができますが、一転問題があります。flake8とblackのデフォルトの設定が競合してしまい、問題が発生します。flake8かblackのどちらかに設定を合わせる必要があります。<code>setup.cfg</code>ファイルを作成して、以下の内容をコピー＆ペーストすることで設定することが可能です。</p><div><pre><code>[flake8]
+max-line-length = 88
+extend-ignore = E203, W503, E501
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    .env,
+    env</code></pre></div><h2><span>Stremlitのデモ</span></h2><p>ここまでで開発環境は整備することができたので、Stremlitで簡易的なページを作成を進めていきます。</p><p>まずは、Stremlitの機能をインストールをしましょう。</p><div><pre><code># stremlitのインストール
+pip install streamlit
+
+# requirements.txtにインストールしたファイルの設定
+pip freeze &gt; requirements.txt </code></pre></div><p><code>src &gt; main.py</code>を設定して以下のファイルをコピー＆ペーストをしてください。</p><div><pre><code>import streamlit as st
+import pandas as pd
+import numpy as np
+
+st.set_page_config(layout="wide")
+
+st.title("🚀 Streamlitの素晴らしい利点")
+
+st.write(
+    "Streamlitを使えば、データサイエンスのプロジェクトを瞬く間にインタラクティブなWebアプリに変えることができます。"
+    "もう複雑なWeb開発の知識は必要ありません！"
+)
+
+st.subheader("💡 利点1: 圧倒的な手軽さ")
+st.write(
+    "Pythonの知識だけで、データスクリプトから直接Webアプリを作成できます。HTML、CSS、JavaScriptなどの"
+    "フロントエンドの知識は一切不要です。これにより、開発時間を大幅に短縮できます。"
+)
+st.code(
+    """
+import streamlit as st
+st.title("こんにちは、Streamlit！")
+st.write("これはたった数行のコードです。")
+"""
+)
+
+st.subheader("⚡ 利点2: 迅速なプロトタイピング")
+st.write(
+    "コードを変更するたびに、アプリがリアルタイムで更新されます。これにより、アイデアをすぐに形にし、"
+    "フィードバックを得ながら反復的に開発を進めることができます。まるでライブコーディングをしているようです！"
+)
+st.info(
+    "💡 ヒント: このページを保存して、Streamlitを実行したままコードを編集してみてください。"
+)
+
+st.subheader("📊 利点3: 美しいデータ可視化が簡単に")
+st.write(
+    "Matplotlib, Plotly, Altairなどの既存のPython可視化ライブラリとシームレスに統合できます。数行のコードで"
+    "インタラクティブなグラフやダッシュボードを作成できます。"
+)
+
+# サンプルグラフの表示
+
+chart_data = pd.DataFrame(np.random.randn(20, 3), columns=["a", "b", "c"])
+st.line_chart(chart_data)
+st.bar_chart(chart_data)
+
+st.subheader("🔄 利点4: インタラクティブなウィジェット")
+st.write(
+    "スライダー、ボタン、テキスト入力など、多様なウィジェットを簡単に組み込むことができます。"
+    "これにより、ユーザーがデータと対話できる動的なアプリケーションを作成できます。"
+)
+
+# インタラクティブなデモ
+value = st.slider("スライダーを動かしてみてください", 0, 100, 50)
+st.write(f"現在の値: {value}")
+
+button_clicked = st.button("ボタンを押してみてください")
+if button_clicked:
+    st.success("ボタンが押されました！")
+
+user_text = st.text_input("ここに何か入力してください", "Streamlitは最高！")
+st.write(f"あなたが入力した内容: {user_text}")
+
+st.subheader("☁️ 利点5: デプロイのしやすさ")
+st.write(
+    "Streamlit Community Cloudを使えば、数クリックでアプリをWebに公開できます。また、Dockerなどの"
+    "コンテナ技術と組み合わせることで、より柔軟なデプロイも可能です。"
+)
+
+st.video("https://www.youtube.com/watch?v=NtLCVE9hwb8")  # Streamlitの紹介動画（例）
+
+st.write("---")
+st.markdown(
+    "### まとめ\n"
+    "Streamlitは、データサイエンティストやアナリストがアイデアを迅速に具現化し、"
+    "それをインタラクティブな形で共有するための強力なツールです。"
+    "ぜひご自身のプロジェクトで試してみてください！"
+)
+
+st.balloons()
+</code></pre></div><p>ファイルを作成したら、以下のコマンドで起動することができます。</p><div><pre><code>streamlit run src/main.py</code></pre></div><p>デフォルトで<code>http://0.0.0.0:8501</code>が立ち上がって真っ白な画面が立ち上がってもあせらなくて大丈夫です。<code>http://localhost:8501</code>にアクセスしてみてください。以下の画面が表示されれば成功です。</p><figure><img/></figure><h2><span>まとめ</span></h2><p>今回は、StreamlitをDevContainerで開発する環境構築について詳しく見てきました。DevContainerを使うことで、チーム内での開発環境統一や、プロジェクトの引き継ぎがスムーズになりますね。</p><p>特に今回のポイントとしては、MicrosoftのPython 3.11ベースイメージを使うことで、Gitやコード解析ツールが標準搭載されている点が大きなメリットでした。また、flake8とblackの設定競合問題も、setup.cfgファイルで解決できることがわかりました。</p><p>Streamlitは本当に手軽にデータアプリケーションを作成できる素晴らしいツールです。今回構築した環境なら、コードを変更するたびにリアルタイムで結果を確認できるので、開発効率が格段に向上します。</p><p>皆さんも、ぜひこの環境でStreamlitアプリケーション開発にチャレンジしてみてください！GitHubリポジトリも公開しているので、クローンして即座に開発を始められます。</p><p>次回は、このStreamlit環境をAzure Web Apps on Containerでデプロイする方法について解説予定です。お楽しみに！</p><p>こちらのブログ「<a href="https://tech-lab.sios.jp/archives/48079">Infrastructure as Code実践：Azure SWA×Bicep×GitHub Actions</a>」と同様の手順でBicepで環境作成からAzureへのデプロイまで目指していきます。</p><p></p><!-- Anyway Feedback Container //--><div>ご覧いただきありがとうございます！
+
+<span>この投稿はお役に立ちましたか？</span><br/><br/><a href="#afb-post-48239">役に立った</a><a href="#afb-post-48239">役に立たなかった</a><br/><br/><span>0人がこの投稿は役に立ったと言っています。</span><input/><input/></div><!-- //Anyway Feedback Container --></section>
