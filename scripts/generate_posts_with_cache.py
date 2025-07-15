@@ -444,7 +444,9 @@ class ClaudeAPIXPostGenerator:
         costs = metadata.get("costs", {})
 
         # YAML Frontmatterの生成
-        frontmatter = f"""---
+        frontmatter = f"""
+<!--
+---
 # =================================================================
 # Claude API X投稿自動生成システム - 生成ファイルメタデータ
 # =================================================================
@@ -541,6 +543,7 @@ revision_history:
     date: "{datetime.now().strftime('%Y-%m-%d')}"
     changes: "初回生成（Claude API使用）"
 ---
+-->
 
 """
 
