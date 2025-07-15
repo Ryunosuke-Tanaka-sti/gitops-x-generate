@@ -64,6 +64,7 @@ class ClaudeAPIXPostGenerator:
 
         # 使用するモデル
         self.model = "claude-3-5-sonnet-20241022"
+        self.cache_enabled = True
 
         # 料金設定（2025年7月時点の公式料金）
         self.pricing = {
@@ -469,7 +470,7 @@ prompt_cache:
   cached_tokens: {usage.get('cache_read_input_tokens', 0)}
   estimated_cache_size: {self.estimated_cache_tokens}
   cache_efficiency: {(
-      usage.get('cache_read_input_tokens', 0) / 
+      usage.get('cache_read_input_tokens', 0) /
       self.estimated_cache_tokens * 100
       if self.estimated_cache_tokens > 0 else 0
   ):.1f}%

@@ -133,18 +133,14 @@ class ClaudeAPIXPostGenerator:
         print(f"📁 システムプロンプト読み込み: {prompt_file_path}")
 
         if not prompt_file_path.exists():
-            raise FileNotFoundError(
-                f"システムプロンプトファイルが見つかりません: {prompt_file_path}"
-            )
+            raise FileNotFoundError(f"システムプロンプトファイルが見つかりません: {prompt_file_path}")
 
         try:
             with open(prompt_file_path, "r", encoding="utf-8") as f:
                 content = f.read().strip()
 
             if not content:
-                raise ValueError(
-                    f"システムプロンプトファイルが空です: {prompt_file_path}"
-                )
+                raise ValueError(f"システムプロンプトファイルが空です: {prompt_file_path}")
 
             file_size = len(content.encode("utf-8"))
             line_count = len(content.splitlines())
@@ -214,18 +210,38 @@ class ClaudeAPIXPostGenerator:
 
         try:
             # プロンプトキャッシュを使用してAPIコール
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4000,
-                system=[
-                    {
-                        "type": "text",
-                        "text": self.system_prompt_content,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+            if self.cache_enabled:
+                print("📦 プロンプトキャッシュを使用してAPIコール...")
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4000,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": self.system_prompt_content,
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        }
+                    ]
+                )
+            else:
+                print("🚫 プロンプトキャッシュを使用しないAPIコール...")
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4000,
+                    system=self.system_prompt_content,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        }
+                    ]
+                )
 
             # レスポンスの処理
             content = response.content[0].text
@@ -238,6 +254,7 @@ class ClaudeAPIXPostGenerator:
                 "metadata": metadata,
                 "success": True,
                 "api_call_real": True,
+                "cache_used": self.cache_enabled,
             }
 
         except Exception as e:
@@ -252,19 +269,17 @@ class ClaudeAPIXPostGenerator:
             "stop_reason": response.stop_reason,
             "stop_sequence": response.stop_sequence,
             "usage": {},
-            "costs": {},
+            "costs": {}
         }
 
         # 使用量情報の抽出
-        if hasattr(response, "usage") and response.usage:
+        if hasattr(response, 'usage') and response.usage:
             usage = response.usage
             usage_data = {
-                "input_tokens": getattr(usage, "input_tokens", 0),
-                "output_tokens": getattr(usage, "output_tokens", 0),
-                "cache_creation_input_tokens": getattr(
-                    usage, "cache_creation_input_tokens", 0
-                ),
-                "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0),
+                "input_tokens": getattr(usage, 'input_tokens', 0),
+                "output_tokens": getattr(usage, 'output_tokens', 0),
+                "cache_creation_input_tokens": getattr(usage, 'cache_creation_input_tokens', 0),
+                "cache_read_input_tokens": getattr(usage, 'cache_read_input_tokens', 0),
             }
             metadata["usage"] = usage_data
 
@@ -276,44 +291,72 @@ class ClaudeAPIXPostGenerator:
 
     def _calculate_costs(self, usage: Dict[str, int]) -> Dict[str, float]:
         """料金計算"""
-        input_cost = usage["input_tokens"] * self.pricing["input_per_million"] / 1000000
-        output_cost = (
-            usage["output_tokens"] * self.pricing["output_per_million"] / 1000000
-        )
-        cache_write_cost = (
-            usage["cache_creation_input_tokens"]
-            * self.pricing["cache_write_per_million"]
-            / 1000000
-        )
-        cache_read_cost = (
-            usage["cache_read_input_tokens"]
-            * self.pricing["cache_read_per_million"]
-            / 1000000
-        )
+        # 基本コスト計算
+        if self.cache_enabled:
+            # プロンプトキャッシュ使用時のコスト計算
+            cache_cost = usage["cache_read_input_tokens"] * \
+                self.pricing["cache_read_per_million"] / 1000000
+            cache_write_cost = usage["cache_creation_input_tokens"] * \
+                self.pricing["cache_write_per_million"] / 1000000
+            input_cost = usage["input_tokens"] * \
+                self.pricing["input_per_million"] / 1000000
+        else:
+            # プロンプトキャッシュ未使用時のコスト計算
+            cache_cost = 0
+            cache_write_cost = 0
+            total_input_tokens = (
+                usage["input_tokens"] +
+                usage["cache_creation_input_tokens"] +
+                usage["cache_read_input_tokens"]
+            )
+            input_cost = total_input_tokens * \
+                self.pricing["input_per_million"] / 1000000
 
-        total_cost = input_cost + output_cost + cache_write_cost + cache_read_cost
+        # 出力トークンのコスト（プロンプトキャッシュ使用有無に関わらず同じ）
+        output_cost = usage["output_tokens"] * \
+            self.pricing["output_per_million"] / 1000000
+
+        # 総コスト
+        total_cost = cache_cost + cache_write_cost + input_cost + output_cost
 
         # 削減効果の計算（キャッシュなしとの比較）
+        total_input_tokens_without_cache = (
+            usage["input_tokens"] +
+            usage["cache_creation_input_tokens"] +
+            usage["cache_read_input_tokens"]
+        )
         cost_without_cache = (
-            usage["input_tokens"]
-            + usage["cache_creation_input_tokens"]
-            + usage["cache_read_input_tokens"]
-        ) * self.pricing["input_per_million"] / 1000000 + output_cost
-        cost_reduction = cost_without_cache - total_cost
+            total_input_tokens_without_cache *
+            self.pricing["input_per_million"] / 1000000
+            + output_cost
+        )
+        cost_reduction = cost_without_cache - total_cost if self.cache_enabled else 0
         cost_reduction_percent = (
             (cost_reduction / cost_without_cache * 100) if cost_without_cache > 0 else 0
         )
 
+        # 月間・年間での削減効果試算（月50回実行想定）
+        monthly_savings = cost_reduction * 50  # 月50回実行
+        yearly_savings = monthly_savings * 12  # 年間
+
         return {
+            # 基本コスト情報（USD）
+            "cache_cost": cache_cost,
+            "cache_write_cost": cache_write_cost,
             "input_cost": input_cost,
             "output_cost": output_cost,
-            "cache_write_cost": cache_write_cost,
-            "cache_read_cost": cache_read_cost,
             "total_cost": total_cost,
-            "total_cost_jpy": total_cost * 150,  # 1USD=150JPY想定
+            # 円換算（1USD=150JPY想定）
+            "total_cost_jpy": total_cost * 150,
+            # 削減効果
             "cost_without_cache": cost_without_cache,
             "cost_reduction": cost_reduction,
             "cost_reduction_percent": cost_reduction_percent,
+            # 長期的な削減効果
+            "monthly_savings_usd": monthly_savings,
+            "yearly_savings_usd": yearly_savings,
+            "monthly_savings_jpy": monthly_savings * 150,
+            "yearly_savings_jpy": yearly_savings * 150,
         }
 
     def _print_usage_details(self, result: Dict[str, Any]):
@@ -326,31 +369,46 @@ class ClaudeAPIXPostGenerator:
         costs = metadata.get("costs", {})
 
         print("\n💰 コスト詳細レポート:")
+        print(f"   - キャッシュ読み取り: ${costs.get('cache_cost', 0):.6f}")
+        print(f"   - キャッシュ書き込み: ${costs.get('cache_write_cost', 0):.6f}")
         print(f"   - 入力処理: ${costs.get('input_cost', 0):.6f}")
         print(f"   - 出力生成: ${costs.get('output_cost', 0):.6f}")
-        print(f"   - キャッシュ書き込み: ${costs.get('cache_write_cost', 0):.6f}")
-        print(f"   - キャッシュ読み取り: ${costs.get('cache_read_cost', 0):.6f}")
         print(
-            f"   - 合計: ${costs.get('total_cost', 0):.6f} (約{costs.get('total_cost_jpy', 0):.1f}円)"
-        )
+            f"   - 合計: ${costs.get('total_cost', 0):.6f} (約{costs.get('total_cost_jpy', 0):.1f}円)")
 
-        if costs.get("cost_reduction", 0) > 0:
+        if self.cache_enabled:
             print("\n📊 コスト削減効果:")
-            print(
-                f"   - キャッシュなしの場合: ${costs.get('cost_without_cache', 0):.6f}"
-            )
+            print(f"   - キャッシュなしの場合: ${costs.get('cost_without_cache', 0):.6f}")
             print(f"   - 削減金額: ${costs.get('cost_reduction', 0):.6f}")
             print(f"   - 削減率: {costs.get('cost_reduction_percent', 0):.1f}%")
+            print(
+                f"   - 月間削減効果: ${costs.get('monthly_savings_usd', 0):.2f} (約{costs.get('monthly_savings_jpy', 0):.0f}円)")
+            print(
+                f"   - 年間削減効果: ${costs.get('yearly_savings_usd', 0):.2f} (約{costs.get('yearly_savings_jpy', 0):.0f}円)")
 
         print("\n📊 トークン使用量詳細:")
+        print(f"   - キャッシュ済み: {usage.get('cache_read_input_tokens', 0):,}")
+        print(f"   - キャッシュ作成: {usage.get('cache_creation_input_tokens', 0):,}")
         print(f"   - 入力トークン: {usage.get('input_tokens', 0):,}")
         print(f"   - 出力トークン: {usage.get('output_tokens', 0):,}")
-        print(f"   - キャッシュ作成: {usage.get('cache_creation_input_tokens', 0):,}")
-        print(f"   - キャッシュ読み取り: {usage.get('cache_read_input_tokens', 0):,}")
+        total_input = (
+            usage.get('input_tokens', 0) +
+            usage.get('cache_creation_input_tokens', 0) +
+            usage.get('cache_read_input_tokens', 0)
+        )
+        print(f"   - 総入力: {total_input:,}")
+
+        # プロンプトキャッシュ効率の表示
+        if self.cache_enabled and usage.get('cache_read_input_tokens', 0) > 0:
+            cache_efficiency = (
+                usage.get('cache_read_input_tokens', 0) /
+                self.estimated_cache_tokens * 100
+            )
+            print(f"   - キャッシュ効率: {cache_efficiency:.1f}%")
 
         # 処理パフォーマンス情報
         processing_time = result.get("processing_time_seconds", 0)
-        total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        total_tokens = usage.get('input_tokens', 0) + usage.get('output_tokens', 0)
 
         print("\n⏱️  処理パフォーマンス:")
         print(f"   - 処理時間: {processing_time:.2f}秒")
@@ -405,12 +463,23 @@ api_info:
   stop_reason: "{metadata.get('stop_reason', 'unknown')}"
   api_call_real: true
 
+# プロンプトキャッシュ情報
+prompt_cache:
+  enabled: {str(self.cache_enabled).lower()}
+  cached_tokens: {usage.get('cache_read_input_tokens', 0)}
+  estimated_cache_size: {self.estimated_cache_tokens}
+  cache_efficiency: {(
+      usage.get('cache_read_input_tokens', 0) /
+      self.estimated_cache_tokens * 100
+      if self.estimated_cache_tokens > 0 else 0
+  ):.1f}%
+
 # コスト情報（USD）
 costs_usd:
+  cache_cost: {costs.get('cache_cost', 0):.6f}
+  cache_write_cost: {costs.get('cache_write_cost', 0):.6f}
   input_cost: {costs.get('input_cost', 0):.6f}
   output_cost: {costs.get('output_cost', 0):.6f}
-  cache_write_cost: {costs.get('cache_write_cost', 0):.6f}
-  cache_read_cost: {costs.get('cache_read_cost', 0):.6f}
   total_cost: {costs.get('total_cost', 0):.6f}
   cost_without_cache: {costs.get('cost_without_cache', 0):.6f}
   cost_reduction: {costs.get('cost_reduction', 0):.6f}
@@ -419,19 +488,27 @@ costs_usd:
 costs_jpy:
   total_cost: {costs.get('total_cost_jpy', 0):.1f}
   cost_reduction: {costs.get('cost_reduction', 0) * 150:.1f}
+  monthly_savings: {costs.get('monthly_savings_jpy', 0):.0f}
+  yearly_savings: {costs.get('yearly_savings_jpy', 0):.0f}
 
 # コスト削減効果
 cost_efficiency:
   reduction_percent: {costs.get('cost_reduction_percent', 0):.1f}%
-  cache_enabled: true
+  monthly_usage_assumption: 50  # 月間実行回数想定
+  yearly_usage_assumption: 600  # 年間実行回数想定
 
 # トークン使用量詳細
 token_usage:
-  input_tokens: {usage.get('input_tokens', 0)}
-  output_tokens: {usage.get('output_tokens', 0)}
-  cache_creation_input_tokens: {usage.get('cache_creation_input_tokens', 0)}
-  cache_read_input_tokens: {usage.get('cache_read_input_tokens', 0)}
-  total_tokens: {usage.get('input_tokens', 0) + usage.get('output_tokens', 0)}
+  input:
+    cached: {usage.get('cache_read_input_tokens', 0)}
+    cache_creation: {usage.get('cache_creation_input_tokens', 0)}
+    regular: {usage.get('input_tokens', 0)}
+    total: {usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0) + usage.get('cache_read_input_tokens', 0)}
+  output: {usage.get('output_tokens', 0)}
+  processing_efficiency: {(
+      usage.get('output_tokens', 0) /
+      max(usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0) + usage.get('cache_read_input_tokens', 0), 1)
+  ):.4f}  # 出力/入力比率
 
 # Claude API料金設定
 pricing_info:
@@ -549,7 +626,10 @@ def main():
         # ファイル保存
         print("\n💾 ファイル保存処理...")
         generator.save_to_file(
-            result["content"], filename, html_file, result.get("metadata", {})
+            result["content"],
+            filename,
+            html_file,
+            result.get("metadata", {})
         )
 
         # 実行完了レポート
@@ -561,13 +641,11 @@ def main():
         print(f"⏱️  総実行時間: {total_execution_time:.2f}秒")
         print(f"📁 出力ファイル: {filename}")
         print(
-            f"💰 実際のコスト: ${costs.get('total_cost', 0):.6f} (約{costs.get('total_cost_jpy', 0):.1f}円)"
-        )
+            f"💰 実際のコスト: ${costs.get('total_cost', 0):.6f} (約{costs.get('total_cost_jpy', 0):.1f}円)")
 
-        if costs.get("cost_reduction", 0) > 0:
+        if result.get("cache_used"):
             print(
-                f"📊 コスト削減: {costs.get('cost_reduction_percent', 0):.1f}% (${costs.get('cost_reduction', 0):.6f})"
-            )
+                f"📊 コスト削減: {costs.get('cost_reduction_percent', 0):.1f}% (${costs.get('cost_reduction', 0):.6f})")
 
         print("\n✅ 処理が正常に完了しました!")
         return 0
@@ -582,7 +660,6 @@ def main():
 
         if os.environ.get("DEBUG_MODE", "false").lower() == "true":
             import traceback
-
             print("\n🐛 詳細なエラー情報:")
             traceback.print_exc()
 
